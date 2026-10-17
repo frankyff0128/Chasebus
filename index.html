@@ -97,7 +97,7 @@ textarea{width:100%;min-height:140px;padding:8px;border:1px solid var(--line);bo
 </head>
 <body>
 <div class="wrap">
-<header><h1>樂悠巴</h1><span class="ver">測試版 v8</span></header>
+<header><h1>樂悠巴</h1><span class="ver">測試版 v9</span></header>
 <div id="envWarn" class="banner" hidden></div>
 <div class="tabs" role="tablist">
   <button id="tabSearch" role="tab" aria-selected="true">查路線</button>
@@ -767,10 +767,23 @@ function loadDb() {
 
 /* ---------- 地圖（只顯示香港） ---------- */
 const HK_BOUNDS = L.latLngBounds([22.13, 113.80], [22.58, 114.45]);
-const map = L.map('map', { zoomControl: true, minZoom: 10, maxBounds: HK_BOUNDS.pad(0.1), maxBoundsViscosity: 1 }).fitBounds(HK_BOUNDS);
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19, bounds: HK_BOUNDS.pad(0.1), attribution: '© OpenStreetMap 貢獻者'
-}).addTo(map);
+const map = L.map('map', { zoomControl: true, minZoom: 10, maxZoom: 20, maxBounds: HK_BOUNDS.pad(0.1), maxBoundsViscosity: 1, attributionControl: false }).fitBounds(HK_BOUNDS);
+/* 地圖：地政總署 Map API（底圖 + 中文地名標籤，不用航攝圖）。網址集中放在這裡，日後要改只改這兩行 */
+const TILE_BASE = 'https://mapapi.geodata.gov.hk/gs/api/v1.0.0/xyz/basemap/wgs84/{z}/{x}/{y}.png';
+const TILE_LABEL = 'https://mapapi.geodata.gov.hk/gs/api/v1.0.0/xyz/label/hk/tc/wgs84/{z}/{x}/{y}.png';
+const baseLayer = L.tileLayer(TILE_BASE, { minZoom: 10, maxZoom: 20, bounds: HK_BOUNDS.pad(0.1), zIndex: 1 }).addTo(map);
+L.tileLayer(TILE_LABEL, { minZoom: 10, maxZoom: 20, bounds: HK_BOUNDS.pad(0.1), zIndex: 2 }).addTo(map);
+{ // 如果底圖一張都載入不了，在頁面頂部提示（不影響搜索巴士）
+  let ok = 0, bad = 0;
+  baseLayer.on('tileload', () => { ok++; });
+  baseLayer.on('tileerror', () => {
+    bad++;
+    if (!ok && bad === 4) {
+      const w = $('#envWarn'), t = '地圖底圖載入失敗（地政總署地圖服務連不上），搜索巴士不受影響。可到「資料測試」頁檢查。';
+      w.textContent = w.hidden ? t : w.textContent + ' ' + t; w.hidden = false;
+    }
+  });
+}
 const pinIcon = (cls, txt) => L.divIcon({ className: '', html: `<div class="pin ${cls}">${txt}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] });
 const stopLayer = L.layerGroup().addTo(map);
 const routeLayer = L.layerGroup().addTo(map);
@@ -876,20 +889,6 @@ async function srcALS(q) {
   const xml = await getText('https://www.als.gov.hk/lookup?q=' + encodeURIComponent(q) + '&n=8', 9000);
   return parseALS(xml, DOMParser).map(x => ({ ...x, src: '政府地址' }));
 }
-async function srcPhoton(q) {
-  const j = await getJSON('https://photon.komoot.io/api/?limit=8&bbox=113.8,22.13,114.45,22.58&lat=22.32&lon=114.17&q=' + encodeURIComponent(q), 9000, 1);
-  return (j.features || []).map(f => {
-    const p = f.properties || {}, c = f.geometry && f.geometry.coordinates;
-    if (!c) return null;
-    const street = [p.street, p.housenumber].filter(Boolean).join('');
-    const label = [p.name, street, p.district || p.suburb || p.city].filter(Boolean).join(' ');
-    return label ? { label, lat: c[1], lng: c[0], src: '地圖資料' } : null;
-  }).filter(Boolean);
-}
-async function srcNominatim(q) {
-  const j = await getJSON('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=8&countrycodes=hk&accept-language=zh-HK&viewbox=113.8,22.58,114.45,22.13&bounded=1&q=' + encodeURIComponent(q), 9000, 1);
-  return j.map(x => ({ label: x.display_name.split(',').slice(0, 3).join(' '), lat: +x.lat, lng: +x.lon, src: '地圖資料' }));
-}
 async function srcStops(q) {
   if (!net) return [];
   const key = q.replace(/\s+/g, '');
@@ -901,10 +900,10 @@ async function srcStops(q) {
   return [...seen.values()].sort((a, b) => a.len - b.len).slice(0, 5);
 }
 async function geocode(q) {
-  const jobs = [srcALS, srcPhoton, srcNominatim, srcStops].map(f => limit(f(q), 12000));
+  const jobs = [srcALS, srcStops].map(f => limit(f(q), 12000));
   const rs = await Promise.allSettled(jobs);
   const all = [], fails = [];
-  rs.forEach((r, i) => { if (r.status === 'fulfilled') all.push(...r.value); else fails.push(['政府地址', '地圖資料', '地圖資料', '巴士站'][i]); });
+  rs.forEach((r, i) => { if (r.status === 'fulfilled') all.push(...r.value); else fails.push(['政府地址', '巴士站'][i]); });
   const seen = new Set(), out = [];
   const qn = q.replace(/\s+/g, '');
   const score = x => (x.label.replace(/\s+/g, '').includes(qn) ? 0 : 1);
@@ -926,7 +925,7 @@ async function doSearch(which) {
   if (mine !== searchSeq[which]) return; // 已經有更新的搜尋
   if (!list.length) {
     ul.hidden = true;
-    setStatus(fails.length >= 3 ? '地點搜尋暫時用不了，可以改用「在地圖點選」。' : '找不到相符的地點，試試其他寫法（例如只寫屋苑或大廈名），或用「在地圖點選」。');
+    setStatus(fails.includes('政府地址') ? '政府地址搜尋暫時用不了，可以改用「在地圖點選」，或輸入巴士站名。' : '找不到相符的地點，試試其他寫法（例如只寫屋苑或大廈名），或用「在地圖點選」。');
     return;
   }
   ul.innerHTML = list.map((x, i) => `<li><button type="button" data-i="${i}">${esc(x.label)}<span class="src">${esc(x.src)}</span></button></li>`).join('');
@@ -1156,6 +1155,20 @@ function selectResult(idx) {
 /* ---------- 資料測試（只檢查巴士路線與到站資料） ---------- */
 const diagLines = [];
 const tests = [
+  ['地政總署地圖（底圖與地名標籤）', async () => {
+    const z = 13, n = 2 ** z, lat = 22.3, lng = 114.17;
+    const x = Math.floor((lng + 180) / 360 * n);
+    const y = Math.floor((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * n);
+    const load = url => new Promise((res, rej) => {
+      const im = new Image(); const t = setTimeout(() => rej(new Error('等了太久沒有回應')), 15000);
+      im.onload = () => { clearTimeout(t); res(im.naturalWidth + '×' + im.naturalHeight); };
+      im.onerror = () => { clearTimeout(t); rej(new Error('圖磚載入失敗（網址不對或被擋住）')); };
+      im.src = url.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+    });
+    const a = await load(TILE_BASE).catch(e => { throw new Error('底圖：' + e.message); });
+    const b = await load(TILE_LABEL).catch(e => { throw new Error('底圖正常，但地名標籤：' + e.message); });
+    return `底圖與地名標籤都讀到（圖磚大小 ${a}、${b}）`;
+  }],
   ['巴士路線資料（官方介面：九巴／龍運、城巴）', async () => {
     const nt = await loadDb();
     const k = nt.routes.filter(r => r.co.includes('kmb')).length, c = nt.routes.filter(r => r.co.includes('ctb')).length;
