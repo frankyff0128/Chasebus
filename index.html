@@ -74,6 +74,7 @@ details .field{margin-top:8px}
 .tag.warn{background:transparent;border:1px solid var(--warn);color:var(--warn)}
 .res .line{margin:6px 0}.res .sub{font-size:13px;color:var(--muted);margin-top:2px}
 .rt{display:inline-block;padding:0 7px;border-radius:5px;background:var(--stop);color:#fff;font-weight:700}
+.rt.c{background:#b45309}
 @media (prefers-color-scheme:dark){.rt{color:#0c1620}}
 .links{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 .links a{display:inline-block;padding:8px 10px;border:1px solid var(--accent);color:var(--accent);border-radius:8px;text-decoration:none;font-weight:600}
@@ -87,7 +88,7 @@ textarea{width:100%;min-height:140px;padding:8px;border:1px solid var(--line);bo
 </head>
 <body>
 <div class="wrap">
-<header><h1>樂悠巴</h1><span class="ver">測試版 v4</span></header>
+<header><h1>樂悠巴</h1><span class="ver">測試版 v5</span></header>
 <div id="envWarn" class="banner" hidden></div>
 <div class="tabs" role="tablist">
   <button id="tabSearch" role="tab" aria-selected="true">查路線</button>
@@ -118,6 +119,7 @@ textarea{width:100%;min-height:140px;padding:8px;border:1px solid var(--line);bo
     </details>
     <button class="primary" id="go" disabled>搜索巴士</button>
     <p class="hint" id="status" role="status">先設定終點。</p>
+    <p class="hint" id="dbStat"></p>
   </div>
   <div id="mapWrap">
     <div id="map" aria-label="地圖"></div>
@@ -167,34 +169,49 @@ function nearStops(stops, lat, lng, r) {
   return out;
 }
 
-/* ---- 整合資料（hk-bus-crawling 每日整理）縮減成只剩九巴／龍運／城巴 ---- */
-function trimDb(raw) {
-  const routes = [], need = new Set();
-  for (const [id, r] of Object.entries(raw.routeList || {})) {
-    const st = {}, bound = {};
-    for (const c of (r.co || [])) {
-      const k = String(c).toLowerCase();
-      if (k !== 'kmb' && k !== 'ctb') continue;
-      const arr = r.stops && r.stops[c];
-      if (!Array.isArray(arr) || arr.length < 2) continue;
-      st[k] = arr; bound[k] = (r.bound && (r.bound[c] || r.bound[k])) || 'O';
-      arr.forEach(x => need.add(x));
-    }
-    const cos = Object.keys(st);
-    if (!cos.length) continue;
-    routes.push({
-      id, route: String(r.route), co: cos, stops: st, bound,
-      orig: (r.orig && (r.orig.zh || r.orig.en)) || '', dest: (r.dest && (r.dest.zh || r.dest.en)) || '',
-      st: r.serviceType == null ? 1 : r.serviceType
-    });
-  }
+/* ---- 官方資料（data.gov.hk 公布的九巴／龍運、城巴介面）整理成統一格式 ----
+   routes: [{id,route,co:[co],stops:{co:[站 id，依站序]},bound:{co:'O'|'I'},orig,dest,st}]
+   stops:  {站 id: [名稱, 緯度, 經度]} */
+function kmbDb(rj, sj, rsj) {
   const stops = {};
-  for (const id of need) {
-    const s = raw.stopList && raw.stopList[id];
-    if (s && s.location && isFinite(+s.location.lat) && isFinite(+s.location.lng))
-      stops[id] = [(s.name && (s.name.zh || s.name.en)) || id, +s.location.lat, +s.location.lng];
+  for (const s of sj.data) {
+    const lat = parseFloat(s.lat), lng = parseFloat(s.long);
+    if (isFinite(lat) && isFinite(lng)) stops[s.stop] = [s.name_tc || s.name_en || s.stop, lat, lng];
+  }
+  const rmap = new Map();
+  for (const r of rj.data) {
+    if (String(r.service_type) !== '1') continue; // 只用主要班次，特別班次略過
+    rmap.set(r.route + '|' + r.bound, { id: 'kmb|' + r.route + '|' + r.bound, route: r.route, bound: r.bound, orig: r.orig_tc, dest: r.dest_tc, arr: [] });
+  }
+  for (const x of rsj.data) {
+    if (String(x.service_type) !== '1') continue;
+    const r = rmap.get(x.route + '|' + x.bound);
+    const q = parseInt(x.seq, 10);
+    if (r && q >= 1 && q <= 1000) r.arr[q - 1] = x.stop;
+  }
+  const routes = [];
+  for (const r of rmap.values()) {
+    const a = Array.from(r.arr, x => x || ''); // 站序有缺口時用空字串佔位，保持站序位置正確
+    if (a.length < 2) continue;
+    routes.push({ id: r.id, route: r.route, co: ['kmb'], stops: { kmb: a }, bound: { kmb: r.bound }, orig: r.orig, dest: r.dest, st: '1' });
   }
   return { routes, stops };
+}
+function ctbDb(list, rs, stopInfo) {
+  const stops = {}, routes = [];
+  for (const [id, s] of stopInfo) stops[id] = [s.name, s.lat, s.lng];
+  for (const r of list) for (const dir of ['O', 'I']) {
+    const a = rs.get(r.route + '|' + dir);
+    if (!a || a.length < 2) continue;
+    routes.push({
+      id: 'ctb|' + r.route + '|' + dir, route: r.route, co: ['ctb'], stops: { ctb: a }, bound: { ctb: dir },
+      orig: dir === 'O' ? r.orig_tc : r.dest_tc, dest: dir === 'O' ? r.dest_tc : r.orig_tc, st: '1'
+    });
+  }
+  return { routes, stops };
+}
+function mergeDb(a, b) {
+  return { routes: a.routes.concat(b.routes), stops: Object.assign({}, a.stops, b.stops) };
 }
 
 /* 建立路線網絡。route.stops = 有座標的車站 id；route.pos = 它在官方站序中的位置（0 起算） */
@@ -517,8 +534,7 @@ if (location.origin === 'null' || location.protocol !== 'https:') {
 }
 const hkTime = ms => new Date(ms).toLocaleTimeString('zh-HK', { hour: '2-digit', minute: '2-digit', hour12: false });
 
-/* ---------- 巴士資料庫（有手機暫存，第二次起很快） ---------- */
-const DBURL = 'https://hkbus.github.io/hk-bus-crawling/routeFareList';
+/* ---------- 巴士資料庫：直接讀 data.gov.hk 公布的九巴／龍運、城巴官方介面；有手機暫存 ---------- */
 function idb() {
   return new Promise((res, rej) => {
     const q = indexedDB.open('lybus', 1);
@@ -529,26 +545,74 @@ function idb() {
 async function idbGet(k) { const d = await idb(); return new Promise((res, rej) => { const r = d.transaction('kv').objectStore('kv').get(k); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
 async function idbSet(k, v) { const d = await idb(); return new Promise((res, rej) => { const t = d.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = () => res(); t.onerror = () => rej(t.error); }); }
 
-let dbPromise = null, net = null, dbInfo = null;
+let dbPromise = null, net = null, dbInfo = null, dbProg = '';
+function setProg(t) { dbProg = t; const e = $('#dbStat'); if (e) e.textContent = t; }
+const DB_MAX_AGE = 3 * 24 * 3600 * 1000; // 路線資料每日更新，暫存用 3 日
+
+async function fetchKmbDb() {
+  setProg('正在下載九巴／龍運路線資料…');
+  const rj = await getJSON(KMB + '/route/', 60000);
+  const rsj = await getJSON(KMB + '/route-stop/', 90000);
+  const sj = await getJSON(KMB + '/stop', 90000);
+  return kmbDb(rj, sj, rsj);
+}
+async function fetchCtbDb() {
+  const rl = (await getJSON(CTB + '/route/ctb', 40000)).data;
+  const jobs = [];
+  rl.forEach(r => ['O', 'I'].forEach(d => jobs.push([r.route, d])));
+  const rs = new Map(); let done = 0, failed = 0;
+  await pool(jobs, 8, async ([route, d]) => {
+    try {
+      const j = await getJSON(`${CTB}/route-stop/CTB/${encodeURIComponent(route)}/${d === 'O' ? 'outbound' : 'inbound'}`, 20000, 2);
+      rs.set(route + '|' + d, j.data.slice().sort((a, b) => a.seq - b.seq).map(x => x.stop));
+    } catch (e) { failed++; }
+  }, () => { done++; if (done % 20 === 0) setProg(`正在下載城巴路線資料 ${done}／${jobs.length}…`); });
+  const ids = new Set();
+  rs.forEach(a => a.forEach(x => ids.add(x)));
+  const idList = [...ids], info = new Map(); let sd = 0, sFail = 0;
+  await pool(idList, 10, async id => {
+    try {
+      const j = await getJSON(`${CTB}/stop/${encodeURIComponent(id)}`, 15000, 2);
+      const lat = parseFloat(j.data.lat), lng = parseFloat(j.data.long);
+      if (isFinite(lat) && isFinite(lng)) info.set(id, { name: j.data.name_tc || j.data.name_en || id, lat, lng });
+    } catch (e) { sFail++; }
+  }, () => { sd++; if (sd % 50 === 0) setProg(`正在下載城巴車站資料 ${sd}／${idList.length}…`); });
+  const bad = failed + sFail;
+  return { db: ctbDb(rl, rs, info), ok: rl.length > 0 && bad <= (jobs.length + idList.length) * 0.1, bad };
+}
 function loadDb() {
   if (dbPromise) return dbPromise;
   dbPromise = (async () => {
-    let cached = null, md5 = null;
-    try { cached = await idbGet('db'); } catch (e) { /* 沒有暫存也沒關係 */ }
-    try { md5 = (await getText(DBURL + '.md5', 12000)).trim(); } catch (e) { /* 取不到版本碼就直接用暫存 */ }
-    if (cached && cached.db && (!md5 || cached.md5 === md5)) {
+    let cached = null;
+    try { cached = await idbGet('db2'); } catch (e) { /* 沒有暫存也沒關係 */ }
+    if (cached && cached.db && Date.now() - cached.t < DB_MAX_AGE) {
       net = buildNet(cached.db);
-      dbInfo = { md5: cached.md5, how: '使用手機暫存' };
+      dbInfo = { how: '使用手機暫存（' + new Date(cached.t).toLocaleDateString('zh-HK') + ' 下載）', ctbErr: '' };
+      setProg('');
       return net;
     }
-    const raw = await getJSON(DBURL + '.min.json', 240000, 2);
-    const db = trimDb(raw);
-    net = buildNet(db);
-    dbInfo = { md5: md5 || '（未知）', how: '剛下載' };
-    try { await idbSet('db', { md5: md5 || String(Date.now()), db }); } catch (e) { /* 存不了也沒關係 */ }
-    return net;
+    try {
+      const k = await fetchKmbDb();
+      let c = { db: { routes: [], stops: {} }, ok: false, bad: 0 }, ctbErr = '';
+      try { c = await fetchCtbDb(); } catch (e) { ctbErr = e.message; }
+      if (!c.ok && !ctbErr) ctbErr = '城巴資料有 ' + c.bad + ' 項沒讀到';
+      const db = mergeDb(k, c.db);
+      net = buildNet(db);
+      dbInfo = { how: '剛從官方介面下載', ctbErr };
+      if (c.ok) { try { await idbSet('db2', { t: Date.now(), db }); } catch (e) { /* 存不了也沒關係 */ } }
+      setProg('');
+      return net;
+    } catch (e) {
+      if (cached && cached.db) { // 下載失敗時，寧願用舊資料
+        net = buildNet(cached.db);
+        dbInfo = { how: '下載新資料失敗，暫用舊暫存', ctbErr: '' };
+        setProg('');
+        return net;
+      }
+      throw e;
+    }
   })();
-  dbPromise.catch(() => { dbPromise = null; });
+  dbPromise.catch(() => { dbPromise = null; setProg(''); });
   return dbPromise;
 }
 
@@ -761,8 +825,10 @@ async function runSearch() {
       const ok = await useGpsAsOrigin(false);
       if (!ok && !pts.o) throw new Error('未有起點');
     }
-    setStatus('正在準備全港巴士路線資料（第一次下載較久，之後會用手機暫存）…');
-    const nt = await loadDb();
+    const iv = setInterval(() => setStatus('正在準備全港巴士路線資料（第一次要下載較多，約 1 至 3 分鐘，請不要關閉頁面）。' + dbProg), 700);
+    let nt;
+    try { nt = await loadDb(); } finally { clearInterval(iv); }
+    if (dbInfo && dbInfo.ctbErr) setStatus('注意：' + dbInfo.ctbErr + '，這次的結果可能缺少城巴路線。');
     const r = +$('#rad').value, maxRides = +$('#maxTr').value + 1, trM = +$('#trWalk').value * WALK_M_PER_MIN / DETOUR;
     const oNear = nearStops(nt.stops, pts.o.lat, pts.o.lng, r);
     const dNear = nearStops(nt.stops, pts.d.lat, pts.d.lng, r);
@@ -827,13 +893,13 @@ function renderResults(n) {
     const first = ev.legs[0], nt = searchState.net;
     const mins = Math.max(1, Math.round(ev.totalSec / 60));
     const fl = [`步行 ${ev.walkO} 分`];
-    ev.legs.forEach(l => { fl.push(`<span class="rt">${esc(l.r.route)}</span>`); if (l.walkAfter > 0) fl.push(`步行 ${l.walkAfter} 分`); });
+    ev.legs.forEach(l => { fl.push(`<span class="rt${l.r.co[0] === 'ctb' ? ' c' : ''}">${esc(l.r.route)}</span>`); if (l.walkAfter > 0) fl.push(`步行 ${l.walkAfter} 分`); });
     const flow = fl.join(' → ');
     const detail = ev.legs.map((l, k) => {
       const bs = nt.stops.get(l.r.stops[l.i]), as = nt.stops.get(l.r.stops[l.j]);
       const sched = l.board.rmk && l.board.rmk.indexOf('原定') >= 0 ? '（原定班次）' : '';
       return (k > 0 ? `<div class="sub">轉乘 ${esc(l.r.route)}：預計等候約 ${Math.max(0, Math.round(l.wait / 60000))} 分鐘</div>` : '') +
-        `<div class="sub"><span class="rt">${esc(l.r.route)}</span> 往${esc(l.r.dest)}：「${esc(bs.name)}」上車（${l.nextMin < 1 ? '即將到' : l.nextMin + ' 分鐘後到'}${sched}），乘 ${l.nStops} 站，「${esc(as.name)}」下車${l.est ? '（行車時間為估算）' : ''}</div>`;
+        `<div class="sub"><span class="rt${l.r.co[0] === 'ctb' ? ' c' : ''}">${esc(l.r.route)}</span>${l.r.co[0] === 'ctb' ? '（城巴）' : ''} 往${esc(l.r.dest)}：「${esc(bs.name)}」上車（${l.nextMin < 1 ? '即將到' : l.nextMin + ' 分鐘後到'}${sched}），乘 ${l.nStops} 站，「${esc(as.name)}」下車${l.est ? '（行車時間為估算）' : ''}</div>`;
     }).join('');
     return `<div class="res" role="button" tabindex="0" data-idx="${idx}" aria-selected="${idx === selectedIdx}">
       <div class="top"><div class="tot">約 <b>${mins}</b> 分鐘<span class="tag">${ev.transfers ? '轉車 ' + ev.transfers + ' 次' : '直達'}</span>${ev.estimated ? '<span class="tag warn">含估算</span>' : ''}</div>
@@ -877,10 +943,11 @@ function selectResult(idx) {
 /* ---------- 資料測試（只檢查巴士路線與到站資料） ---------- */
 const diagLines = [];
 const tests = [
-  ['巴士路線資料（九巴／龍運／城巴）', async () => {
+  ['巴士路線資料（官方介面：九巴／龍運、城巴）', async () => {
     const nt = await loadDb();
     const k = nt.routes.filter(r => r.co.includes('kmb')).length, c = nt.routes.filter(r => r.co.includes('ctb')).length;
-    return `九巴／龍運 ${k} 條路線方向、城巴 ${c} 條路線方向、共 ${nt.stops.size} 個巴士站（${dbInfo.how}，版本 ${String(dbInfo.md5).slice(0, 8)}）`;
+    if (!c) throw new Error('九巴／龍運 ' + k + ' 條路線方向已讀到，但城巴資料讀不到：' + (dbInfo.ctbErr || '原因不明'));
+    return `九巴／龍運 ${k} 條路線方向、城巴 ${c} 條路線方向、共 ${nt.stops.size} 個巴士站（${dbInfo.how}）` + (dbInfo.ctbErr ? `；注意：${dbInfo.ctbErr}` : '');
   }],
   ['九巴／龍運：實時到站', async () => {
     const nt = await loadDb();
