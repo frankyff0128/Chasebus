@@ -97,7 +97,7 @@ textarea{width:100%;min-height:140px;padding:8px;border:1px solid var(--line);bo
 </head>
 <body>
 <div class="wrap">
-<header><h1>樂悠巴</h1><span class="ver">測試版 v9</span></header>
+<header><h1>樂悠巴</h1><span class="ver">測試版 v9.1</span></header>
 <div id="envWarn" class="banner" hidden></div>
 <div class="tabs" role="tablist">
   <button id="tabSearch" role="tab" aria-selected="true">查路線</button>
@@ -1155,6 +1155,34 @@ function selectResult(idx) {
 /* ---------- 資料測試（只檢查巴士路線與到站資料） ---------- */
 const diagLines = [];
 const tests = [
+  ['Map API 步行路線服務', async () => {
+    const base = 'https://mapapi.hkmapservice.gov.hk/PedRoute/NAServer/route/';
+    const m = await getJSON(base + 'retrieveTravelModes?f=json', 20000, 1);
+    const list = m.supportedTravelModes || m.travelModes || [];
+    const mode = list.find(x => /walk|步行/i.test(x.name || '')) || list[0];
+    const modeVal = mode ? (mode.id ?? mode.itemId ?? mode.name) : 1;
+    const A = { lat: 22.3193, lng: 114.1694 }, B = { lat: 22.3236, lng: 114.1695 };
+    const stops = { features: [A, B].map((q, i) => ({ attributes: { Name: 'P' + i }, geometry: { spatialReference: { latestWkid: 4326 }, x: q.lng, y: q.lat } })) };
+    const t0 = Date.now();
+    const r = await getJSON(base + 'solve?stops=' + encodeURIComponent(JSON.stringify(stops)) + '&travelMode=' + encodeURIComponent(typeof modeVal === 'object' ? JSON.stringify(modeVal) : modeVal) + '&directionsLanguage=zh-HK&outSR=4326&f=json&returnZ=true&returnDirections=false&returnRoutes=true', 25000, 1);
+    const f = r.routes && r.routes.features && r.routes.features[0];
+    if (!f) throw new Error('有回應但找不到路線：' + JSON.stringify(r).slice(0, 200));
+    let len = 0; for (const path of (f.geometry.paths || [])) for (let i = 1; i < path.length; i++) len += hav(path[i-1][1], path[i-1][0], path[i][1], path[i][0]);
+    const names = list.map(x => x.name).join('、');
+    return `可用。直線約 ${Math.round(hav(A.lat, A.lng, B.lat, B.lng))} 米，步行路線約 ${Math.round(len)} 米，用時 ${Date.now() - t0} 毫秒。出行方式：${names || '（無）'}；欄位：${Object.keys(f.attributes || {}).slice(0, 6).join(',')}`;
+  }],
+  ['運輸署巴士路線線形（GeoJSON）', async () => {
+    const j = await getJSON('https://static.data.gov.hk/td/routes-fares-geojson/JSON_BUS.json', 90000, 1);
+    const f = j.features || [];
+    if (!f.length) throw new Error('讀到檔案但沒有路線資料');
+    const p = f[0].properties || {};
+    return `讀到 ${f.length} 筆；線形類型 ${f[0].geometry && f[0].geometry.type}；欄位：${Object.keys(p).join(',')}；例：${JSON.stringify(p).slice(0, 160)}`;
+  }],
+  ['運輸署巴士車費資料（CSV）', async () => {
+    const t = await getText('https://static.data.gov.hk/td/routes-fares-geojson/FARE_BUS.csv', 60000);
+    const lines = t.replace(/^\uFEFF/, '').split(/\r?\n/).filter(Boolean);
+    return `讀到 ${lines.length - 1} 行；標題：${lines[0].slice(0, 200)}；第一行：${(lines[1] || '').slice(0, 160)}`;
+  }],
   ['地政總署地圖（底圖與地名標籤）', async () => {
     const z = 13, n = 2 ** z, lat = 22.3, lng = 114.17;
     const x = Math.floor((lng + 180) / 360 * n);
