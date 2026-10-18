@@ -105,7 +105,7 @@ textarea{width:100%;min-height:140px;padding:8px;border:1px solid var(--line);bo
 </head>
 <body>
 <div class="wrap">
-<header><h1>樂悠巴</h1><span class="ver">測試版 v9.9</span></header>
+<header><h1>樂悠巴</h1><span class="ver">測試版 v9.10</span></header>
 <div id="envWarn" class="banner" hidden></div>
 <div class="tabs" role="tablist">
   <button id="tabSearch" role="tab" aria-selected="true">查路線</button>
@@ -1209,6 +1209,14 @@ async function runSearch() {
             避免在轉乘站乾等很久），再比首程候車時間，最後比總時間。 */
       const w1 = x => Math.round(x.ev.legs[0].wait / 60000);
       const pen = x => x.ev.legs.reduce((a, l) => { const w = Math.max(0, l.wait / 60000); return a + w + w * w / 20; }, 0);
+      /* 去除重複：同一組路線（例如都是 101 轉 N118），只是上車站或下車站不同，只保留總時間最短的一個（相同則候車扣分少者） */
+      const sigOf = x => x.plan.legs.map(l => l.r.id).join('>');
+      const dedupe = arr => {
+        const m = new Map();
+        for (const x of arr) { const k = sigOf(x), c = m.get(k); if (!c || rnd(x.ev) < rnd(c.ev) || (rnd(x.ev) === rnd(c.ev) && pen(x) < pen(c))) m.set(k, x); }
+        arr.splice(0, arr.length, ...m.values());
+      };
+      dedupe(D); dedupe(T);
       const tolOf = base => Math.min(3, Math.max(1, Math.round(base * 0.05)));
       const smartSort = arr => {
         arr.sort((a, b) => rnd(a.ev) - rnd(b.ev) || a.ev.transfers - b.ev.transfers || a.ev.waitTotal - b.ev.waitTotal);
@@ -1360,7 +1368,7 @@ function renderResults() {
       const sched = l.board.rmk && l.board.rmk.indexOf('原定') >= 0 ? '（原定班次）' : '';
       const w = Math.max(0, Math.round(l.wait / 60000));
       return (k > 0 ? `<div class="sub trw">轉乘 ${esc(l.r.route)}：預計等候約 <span class="wt ${w < 5 ? 'y' : 'g'}">${w} 分鐘</span></div>` : '') +
-        `<div class="sub">${rtBadge(l.r)}${isKmb(l.r) ? '' : '（城巴）'} 往${esc(l.r.dest)}：「${esc(bs.name)}」上車（${minTxt(l.nextMin)}${l.next2Min != null ? '、' + minTxt(l.next2Min) : ''}${sched}），乘 ${l.nStops} 站，「${k < ev.legs.length - 1 ? `<span class="tstop">${esc(as.name)}</span>` : esc(as.name)}」下車${l.est ? '（後段行車時間估算）' : ''}${l.synth ? '（班次按間隔估算）' : ''}</div>`;
+        `<div class="sub">${rtBadge(l.r)}${isKmb(l.r) ? '' : '（城巴）'} 往${esc(l.r.dest)}：「${k === 0 ? `<span class="tstop">${esc(bs.name)}</span>` : esc(bs.name)}」上車（${minTxt(l.nextMin)}${l.next2Min != null ? '、' + minTxt(l.next2Min) : ''}${sched}），乘 ${l.nStops} 站，「${k < ev.legs.length - 1 ? `<span class="tstop">${esc(as.name)}</span>` : esc(as.name)}」下車${l.est ? '（後段行車時間估算）' : ''}${l.synth ? '（班次按間隔估算）' : ''}</div>`;
     }).join('');
     return `<div class="res" role="button" tabindex="0" data-idx="${idx}" aria-selected="${idx === selectedIdx}">
       <div class="top"><div class="tot">約 <b>${mins}</b> 分鐘${ev.transfers ? (tag ? '' : `<span class="tag">轉${ev.transfers}次車</span>`) : '<span class="tag">直達</span>'}${tag ? `<span class="tag good${ev.transfers ? ' sm' : ''}">${esc(tag)}</span>` : ''}${ev.est ? '<span class="tag warn">含估算</span>' : ''}</div>
