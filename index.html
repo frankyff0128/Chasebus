@@ -99,7 +99,7 @@ textarea{width:100%;min-height:140px;padding:8px;border:1px solid var(--line);bo
 </head>
 <body>
 <div class="wrap">
-<header><h1>樂悠巴</h1><span class="ver">測試版 v9.5</span></header>
+<header><h1>樂悠巴</h1><span class="ver">測試版 v9.6</span></header>
 <div id="envWarn" class="banner" hidden></div>
 <div class="tabs" role="tablist">
   <button id="tabSearch" role="tab" aria-selected="true">查路線</button>
@@ -1126,8 +1126,9 @@ async function runSearch() {
     directReport = report;
     const rnd = ev => Math.round(ev.totalSec / 60);
     const show = final => {
-      // 排序：總時間（分鐘）優先，其次轉乘次數，再其次候車時間
-      const cmp = (a, b) => rnd(a.ev) - rnd(b.ev) || a.ev.transfers - b.ev.transfers || a.ev.waitTotal - b.ev.waitTotal;
+      // 排序：總時間（分鐘）優先，其次轉乘次數，再其次首程候車時間（越短越前），最後才比全程候車時間
+      const w1 = x => Math.round(x.ev.legs[0].wait / 60000);
+      const cmp = (a, b) => rnd(a.ev) - rnd(b.ev) || a.ev.transfers - b.ev.transfers || w1(a) - w1(b) || a.ev.waitTotal - b.ev.waitTotal;
       D.sort(cmp);
       const bestD = D.length ? rnd(D[0].ev) : null;
       const T2 = T.filter(x => bestD === null || rnd(x.ev) < bestD);
