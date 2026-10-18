@@ -97,7 +97,7 @@ textarea{width:100%;min-height:140px;padding:8px;border:1px solid var(--line);bo
 </head>
 <body>
 <div class="wrap">
-<header><h1>樂悠巴</h1><span class="ver">測試版 v9.1</span></header>
+<header><h1>樂悠巴</h1><span class="ver">測試版 v9.2</span></header>
 <div id="envWarn" class="banner" hidden></div>
 <div class="tabs" role="tablist">
   <button id="tabSearch" role="tab" aria-selected="true">查路線</button>
@@ -172,6 +172,49 @@ function hav(lat1, lon1, lat2, lon2) {
 function walkMin(m) { return Math.max(1, Math.ceil(m * DETOUR / WALK_M_PER_MIN)); }
 /* 轉車步行：幾乎同一個位置就當作 0 分鐘 */
 function walkTr(m) { return m < 25 ? 0 : walkMin(m); }
+/* ---------- 真實步行距離：地政總署 Map API 行人路線。查到就用，查不到就退回直線估算 ---------- */
+const PED = 'https://mapapi.hkmapservice.gov.hk/PedRoute/NAServer/route/';
+const pedCache = new Map(); let pedMode = null, pedFails = 0, pedOk = 0;
+const pedKey = (a, b) => a.lat.toFixed(5) + ',' + a.lng.toFixed(5) + '|' + b.lat.toFixed(5) + ',' + b.lng.toFixed(5);
+function realMin(a, b, fbM, transfer) {
+  const m = pedCache.get(pedKey(a, b));
+  if (m === undefined) return transfer ? walkTr(fbM) : walkMin(fbM);
+  return (transfer && m < 25) ? 0 : Math.max(1, Math.ceil(m / WALK_M_PER_MIN));
+}
+async function pedRoute(a, b) {
+  const key = pedKey(a, b);
+  if (pedCache.has(key) || (pedFails >= 6 && !pedOk)) return;
+  try {
+    if (pedMode === null) {
+      const m = await getJSON(PED + 'retrieveTravelModes?f=json', 15000, 1);
+      const x = (m.supportedTravelModes || [])[0]; // 第一項是「最短路徑」
+      pedMode = x ? (x.id ?? x.itemId ?? x.name) : 1;
+      if (typeof pedMode === 'object') pedMode = JSON.stringify(pedMode);
+    }
+    const stops = { features: [a, b].map((q, i) => ({ attributes: { Name: 'P' + i }, geometry: { spatialReference: { latestWkid: 4326 }, x: q.lng, y: q.lat } })) };
+    const r = await getJSON(PED + 'solve?stops=' + encodeURIComponent(JSON.stringify(stops)) + '&travelMode=' + encodeURIComponent(pedMode) + '&directionsLanguage=zh-HK&outSR=4326&f=json&returnZ=true&returnDirections=false&returnRoutes=true', 15000, 1);
+    const f = r.routes && r.routes.features && r.routes.features[0];
+    let len = 0;
+    if (f) for (const path of (f.geometry.paths || [])) for (let i = 1; i < path.length; i++) len += hav(path[i - 1][1], path[i - 1][0], path[i][1], path[i][0]);
+    if (len > 0) { pedCache.set(key, len); pedOk++; } else pedFails++;
+  } catch (e) { pedFails++; }
+}
+async function prefetchWalk(pairs, label) {
+  const seen = new Set(), todo = [];
+  for (const [a, b] of pairs) {
+    if (!a || !b) continue;
+    const k = pedKey(a, b);
+    if (seen.has(k) || pedCache.has(k) || hav(a.lat, a.lng, b.lat, b.lng) < 25) continue;
+    seen.add(k); todo.push([a, b]);
+  }
+  if (!todo.length) return;
+  let done = 0;
+  setStatus(label + '（0／' + todo.length + '）');
+  await Promise.race([
+    pool(todo, 6, ([a, b]) => pedRoute(a, b), () => { done++; if (done % 10 === 0) setStatus(label + '（' + done + '／' + todo.length + '）'); }),
+    new Promise(r => setTimeout(r, 8000))
+  ]);
+}
 
 function nearStops(stops, lat, lng, r) {
   const out = new Map();
@@ -568,7 +611,8 @@ function mkLeg(r, i, j, pick, after, arriveT, wait, now, est, synth) {
    轉乘時，下車後步行到轉乘站，之後最少要多 3 分鐘才有下一班車。 */
 function evalPlan(plan, ctx) {
   const { now, store, stops } = ctx;
-  const walkO = walkTr(plan.dO) || 1;
+  const s0 = stops.get(plan.legs[0].r.stops[plan.legs[0].i]);
+  const walkO = (ctx.o && s0 ? realMin(ctx.o, s0, plan.dO, true) : walkTr(plan.dO)) || 1;
   let t = now + walkO * 60000, est = false;
   const legs = [];
   for (let n = 0; n < plan.legs.length; n++) {
@@ -585,25 +629,27 @@ function evalPlan(plan, ctx) {
     if (n + 1 < plan.legs.length) {
       const nx = plan.legs[n + 1];
       const a = stops.get(r.stops[L.j]), b = stops.get(nx.r.stops[nx.i]);
-      leg.walkAfter = walkTr(hav(a.lat, a.lng, b.lat, b.lng));
+      leg.walkAfter = realMin(a, b, hav(a.lat, a.lng, b.lat, b.lng), true);
       t += leg.walkAfter * 60000;
     }
   }
-  const wD = walkMin(plan.dD);
+  const lastL = plan.legs[plan.legs.length - 1], sd = stops.get(lastL.r.stops[lastL.j]);
+  const wD = ctx.d && sd ? realMin(sd, ctx.d, plan.dD, false) : walkMin(plan.dD);
   legs[legs.length - 1].walkAfter = wD;
   const tEnd = t + wD * 60000;
   return { legs, walkO, tEnd, est, totalSec: (tEnd - now) / 1000, transfers: legs.length - 1, waitTotal: legs.reduce((a, l) => a + l.wait, 0) };
 }
 /* 九巴直達：路線的到站資料涵蓋所有車站，所以起點附近每個上車站、終點附近每個下車站都試，取總時間最短的 */
 function evalDirectKmb(r, oNear, dNear, ctx) {
-  const { now, store } = ctx;
+  const { now, store, stops } = ctx;
   let best = null, sawBus = false;
   for (let i = 0; i < r.stops.length - 1; i++) {
     const dO = oNear.get(r.stops[i]);
     if (dO === undefined) continue;
     const arr = etaAt(r, i, store);
     if (!arr) return { drop: 'nodata', route: r.route };
-    const walkO = walkTr(dO) || 1, t = now + walkO * 60000;
+    const si = stops.get(r.stops[i]);
+    const walkO = (ctx.o && si ? realMin(ctx.o, si, dO, true) : walkTr(dO)) || 1, t = now + walkO * 60000;
     const pi = arr.findIndex(x => x.t >= t);
     if (pi < 0) continue;
     sawBus = true;
@@ -614,7 +660,8 @@ function evalDirectKmb(r, oNear, dNear, ctx) {
       if (dD === undefined) continue;
       const verified = m.has(j);
       const tj = verified ? m.get(j) : extrapolate(m, i, j, r.cum, pick.t);
-      const wD = walkMin(dD), tEnd = tj + wD * 60000;
+      const sj = stops.get(r.stops[j]);
+      const wD = ctx.d && sj ? realMin(sj, ctx.d, dD, false) : walkMin(dD), tEnd = tj + wD * 60000;
       if (!best || tEnd < best.tEnd) {
         const leg = mkLeg(r, i, j, pick, after, tj, pick.t - t, now, !verified, false);
         leg.walkAfter = wD;
@@ -1017,8 +1064,10 @@ async function runSearch() {
     for (const p of others) { if (firstKeys.size >= 100) break; firstKeys.add(boardKey(p.legs[0])); }
     setStatus(`找到 ${direct.length} 條直達路線和 ${others.length} 個轉乘方案，正在查實時到站…`);
     await getKeys([...k1, ...firstKeys], '查詢直達及第一程的實時到站');
+    const near = (m, n) => [...m.entries()].sort((a, b) => a[1] - b[1]).slice(0, n).map(([id]) => nt.stops.get(id));
+    await prefetchWalk([...near(oNear, 25).map(x => [pts.o, x]), ...near(dNear, 25).map(x => [x, pts.d])], '查詢真實步行距離');
     const now = Date.now();
-    const ctx = { now, store, stops: nt.stops };
+    const ctx = { now, store, stops: nt.stops, o: pts.o, d: pts.d };
     const drops = { nodata: 0, nobus: 0, nochain: 0, slower: 0, est: 0 };
     const strict = $('#strict').checked;
     const D = [], T = [];
@@ -1051,7 +1100,8 @@ async function runSearch() {
         (final && drops.slower ? `；${drops.slower} 個轉乘方案不比直達快，已隱藏` : '') +
         (drops.est ? `；${drops.est} 個含估算的方案按設定不顯示` : '') +
         (nEst ? `；其中 ${nEst} 個含估算（橙色標籤）` : '') +
-        (final && !D.length && T2.length ? '。注意：沒有可確認的直達班次，轉乘方案未能與直達比較' : '') + '。');
+        (final && !D.length && T2.length ? '。注意：沒有可確認的直達班次，轉乘方案未能與直達比較' : '') + '。' +
+        (final ? (pedCache.size ? `步行時間已按地政總署步行路線計算（${pedCache.size} 段）。` : '步行時間用直線估算（地政總署步行服務未能使用）。') : ''));
       if (final) scrollToResults();
     };
     if (!others.length || maxRides < 2) { show(true); return; }
@@ -1074,6 +1124,12 @@ async function runSearch() {
       ks.forEach(k => keySet2.add(k)); chosen.push(p);
     }
     await getKeys([...keySet2], `查詢轉乘方案的實時到站（共 ${chosen.length} 個方案）`);
+    { const pairs = [], sg = (L, k) => nt.stops.get(L.r.stops[k]);
+      for (const p of chosen) { const Ls = p.legs;
+        pairs.push([pts.o, sg(Ls[0], Ls[0].i)]);
+        for (let n = 0; n < Ls.length - 1; n++) pairs.push([sg(Ls[n], Ls[n].j), sg(Ls[n + 1], Ls[n + 1].i)]);
+        pairs.push([sg(Ls[Ls.length - 1], Ls[Ls.length - 1].j), pts.d]); }
+      await prefetchWalk(pairs.slice(0, 160), '查詢轉乘步行距離'); }
     for (const p of chosen) { const ev = evalPlan(p, ctx); if (ev.drop) note(ev); else if (strict && ev.est) drops.est++; else T.push({ plan: p, ev }); }
     show(true);
   } catch (e) {
@@ -1171,17 +1227,14 @@ const tests = [
     const names = list.map(x => x.name).join('、');
     return `可用。直線約 ${Math.round(hav(A.lat, A.lng, B.lat, B.lng))} 米，步行路線約 ${Math.round(len)} 米，用時 ${Date.now() - t0} 毫秒。出行方式：${names || '（無）'}；欄位：${Object.keys(f.attributes || {}).slice(0, 6).join(',')}`;
   }],
-  ['運輸署巴士路線線形（GeoJSON）', async () => {
+  ['運輸署巴士路線資料（站序、行車時間、車費）', async () => {
     const j = await getJSON('https://static.data.gov.hk/td/routes-fares-geojson/JSON_BUS.json', 90000, 1);
     const f = j.features || [];
     if (!f.length) throw new Error('讀到檔案但沒有路線資料');
-    const p = f[0].properties || {};
-    return `讀到 ${f.length} 筆；線形類型 ${f[0].geometry && f[0].geometry.type}；欄位：${Object.keys(p).join(',')}；例：${JSON.stringify(p).slice(0, 160)}`;
-  }],
-  ['運輸署巴士車費資料（CSV）', async () => {
-    const t = await getText('https://static.data.gov.hk/td/routes-fares-geojson/FARE_BUS.csv', 60000);
-    const lines = t.replace(/^\uFEFF/, '').split(/\r?\n/).filter(Boolean);
-    return `讀到 ${lines.length - 1} 行；標題：${lines[0].slice(0, 200)}；第一行：${(lines[1] || '').slice(0, 160)}`;
+    const g = new Map(), co = {};
+    for (const x of f) { const q = x.properties; co[q.companyCode] = (co[q.companyCode] || 0) + 1; const k = q.routeId + '-' + q.routeSeq; const e = g.get(k) || { q, n: 0 }; e.n++; g.set(k, e); }
+    const ex = [...g.values()].filter(e => e.q.companyCode === 'KMB').slice(0, 3).map(e => `${e.q.routeNameC}(方向${e.q.routeSeq}) 行車時間=${e.q.journeyTime} 全程車費=${e.q.fullFare} 站數=${e.n}`).join('；');
+    return `讀到 ${f.length} 個站點、${g.size} 條路線方向；按公司：${JSON.stringify(co)}；例：${ex}`;
   }],
   ['地政總署地圖（底圖與地名標籤）', async () => {
     const z = 13, n = 2 ** z, lat = 22.3, lng = 114.17;
