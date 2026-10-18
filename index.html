@@ -99,7 +99,7 @@ textarea{width:100%;min-height:140px;padding:8px;border:1px solid var(--line);bo
 </head>
 <body>
 <div class="wrap">
-<header><h1>樂悠巴</h1><span class="ver">測試版 v9.6</span></header>
+<header><h1>樂悠巴</h1><span class="ver">測試版 v9.7</span></header>
 <div id="envWarn" class="banner" hidden></div>
 <div class="tabs" role="tablist">
   <button id="tabSearch" role="tab" aria-selected="true">查路線</button>
@@ -1126,15 +1126,32 @@ async function runSearch() {
     directReport = report;
     const rnd = ev => Math.round(ev.totalSec / 60);
     const show = final => {
-      // 排序：總時間（分鐘）優先，其次轉乘次數，再其次首程候車時間（越短越前），最後才比全程候車時間
+      /* 排序：
+         1. 總時間相近的方案歸為同一組：以該組最快者為基準，容許 5%（最少 1 分鐘、最多 3 分鐘）。
+         2. 組內先比轉乘次數（少者優先），再比「候車扣分」（每一次候車分開計算，等得越久扣分越重，
+            避免在轉乘站乾等很久），再比首程候車時間，最後比總時間。 */
       const w1 = x => Math.round(x.ev.legs[0].wait / 60000);
-      const cmp = (a, b) => rnd(a.ev) - rnd(b.ev) || a.ev.transfers - b.ev.transfers || w1(a) - w1(b) || a.ev.waitTotal - b.ev.waitTotal;
-      D.sort(cmp);
-      const bestD = D.length ? rnd(D[0].ev) : null;
+      const pen = x => x.ev.legs.reduce((a, l) => { const w = Math.max(0, l.wait / 60000); return a + w + w * w / 20; }, 0);
+      const tolOf = base => Math.min(3, Math.max(1, Math.round(base * 0.05)));
+      const smartSort = arr => {
+        arr.sort((a, b) => rnd(a.ev) - rnd(b.ev) || a.ev.transfers - b.ev.transfers || a.ev.waitTotal - b.ev.waitTotal);
+        const out = [];
+        let i = 0;
+        while (i < arr.length) {
+          const base = rnd(arr[i].ev), tol = tolOf(base);
+          let j = i; while (j < arr.length && rnd(arr[j].ev) <= base + tol) j++;
+          out.push(...arr.slice(i, j).sort((a, b) => a.ev.transfers - b.ev.transfers || pen(a) - pen(b) || w1(a) - w1(b) || rnd(a.ev) - rnd(b.ev)));
+          i = j;
+        }
+        arr.splice(0, arr.length, ...out);
+      };
+      const bestD = D.length ? Math.min(...D.map(x => rnd(x.ev))) : null;
+      const fastestD = D.find(x => rnd(x.ev) === bestD);
+      smartSort(D);
       const T2 = T.filter(x => bestD === null || rnd(x.ev) < bestD);
-      T2.sort(cmp);
+      smartSort(T2);
       drops.slower = T.length - T2.length;
-      D.forEach((x, k) => { x.tag = k === 0 ? '最快直達' : ''; });
+      D.forEach(x => { x.tag = x === fastestD ? '最快直達' : ''; });
       T2.forEach(x => { x.tag = bestD === null ? '' : '轉' + x.ev.transfers + '次車快' + (bestD - rnd(x.ev)) + '分鐘'; });
       current = D.concat(T2); nDirect = D.length;
       shownD = Math.min(D.length, 5); shownT = Math.min(T2.length, 10); selectedIdx = -1;
