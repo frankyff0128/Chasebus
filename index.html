@@ -99,7 +99,7 @@ textarea{width:100%;min-height:140px;padding:8px;border:1px solid var(--line);bo
 </head>
 <body>
 <div class="wrap">
-<header><h1>樂悠巴</h1><span class="ver">測試版 v9.4</span></header>
+<header><h1>樂悠巴</h1><span class="ver">測試版 v9.5</span></header>
 <div id="envWarn" class="banner" hidden></div>
 <div class="tabs" role="tablist">
   <button id="tabSearch" role="tab" aria-selected="true">查路線</button>
@@ -575,12 +575,41 @@ function chainSparse(listAt, samples, cum, t0, minFrac) {
 }
 /* 官方到站預報只列出每個站「接下來幾班車」，而且終點站通常沒有預報，所以長途行程的後段（或終點站）
    常常追蹤不到。追蹤不到的部分，用「已追蹤到的那段的實際車速」去推算（限制在 0.6 至 1.8 倍之間），並標示為估算。 */
-function extrapolate(m, i, j, cum, t0) {
+/* A 方案：用「同一時刻其他班次」推斷行車時間。
+   兩個相鄰站各自列出接下來幾班車，把它們一班一班對起來（下一站的時間必須較晚），
+   就知道這一刻這段路實際要多久，再和估計時間相比得出「現在比平時快或慢幾倍」。取各段的中位數，
+   用來推算追蹤不到的後段。對不上時退回舊方法（用已追蹤那段的車速）。 */
+function segRatio(A, B, est) {
+  if (!A.length || !B.length || est < 20) return null;
+  let best = null;
+  for (let d = 0; d < B.length; d++) {
+    const diffs = [];
+    for (let k = 0; k < A.length && k + d < B.length; k++) diffs.push((B[k + d].t - A[k].t) / 1000);
+    if (!diffs.length || diffs.some(x => x <= 0)) continue;
+    diffs.sort((a, b) => a - b);
+    const med = diffs[diffs.length >> 1], e = Math.abs(Math.log(med / est));
+    if (!best || e < best.e) best = { med, e };
+  }
+  return best && best.med > 0.4 * est && best.med < 2.5 * est ? best.med / est : null;
+}
+function extrapolate(m, i, j, cum, t0, listAt) {
   let q = i, tq = t0;
   for (const [p, tp] of m) if (p >= q && p <= j) { q = p; tq = tp; }
   let ratio = 1;
   const stat = cum[q] - cum[i];
-  if (stat > 120) ratio = Math.min(1.8, Math.max(0.6, (tq - t0) / 1000 / stat));
+  if (stat > 120) ratio = (tq - t0) / 1000 / stat;
+  if (listAt) {
+    const rs = [];
+    for (let p = i; p < j; p++) {
+      const A = listAt(p); if (!A || !A.length) continue;
+      for (let g = 1; g <= CTB_GAP && p + g <= j; g++) {
+        const B = listAt(p + g);
+        if (B && B.length) { const x = segRatio(A, B, cum[p + g] - cum[p]); if (x != null) rs.push(x); break; }
+      }
+    }
+    if (rs.length >= 2) { rs.sort((a, b) => a - b); ratio = rs[rs.length >> 1]; }
+  }
+  ratio = Math.min(1.8, Math.max(0.6, ratio));
   return tq + (cum[j] - cum[q]) * 1000 * ratio;
 }
 /* 一程巴士從第 L.i 站（上車時間 t0）到第 L.j 站的到達時間。回傳 {t, est}；est 為 true 表示含推算 */
@@ -590,7 +619,7 @@ function rideArrive(L, t0, store) {
     ? chainAll(p => etaAt(r, p, store), L.i, L.j, r.cum, t0)
     : chainSparse(p => etaAt(r, p, store), sampleIdx(L.i, L.j, CTB_GAP), r.cum, t0, 0.4);
   if (m.has(L.j)) return { t: m.get(L.j), est: false };
-  return { t: extrapolate(m, L.i, L.j, r.cum, t0), est: true };
+  return { t: extrapolate(m, L.i, L.j, r.cum, t0, p => etaAt(r, p, store)), est: true };
 }
 /* 轉乘時，如果轉乘站列出的班次都比我們到達的時間早（長途行程，後面的班次官方還未列出），
    用已列出班次的平均間隔往後推算下一班，並標示為估算。第一程巴士一定要有真實預報，不推算。 */
@@ -667,7 +696,7 @@ function evalDirectKmb(r, oNear, dNear, ctx) {
       const dD = dNear.get(r.stops[j]);
       if (dD === undefined) continue;
       const verified = m.has(j);
-      const tj = verified ? m.get(j) : extrapolate(m, i, j, r.cum, pick.t);
+      const tj = verified ? m.get(j) : extrapolate(m, i, j, r.cum, pick.t, p => etaAt(r, p, store));
       const sj = stops.get(r.stops[j]);
       const wD = ctx.d && sj ? realMin(sj, ctx.d, dD, false) : walkMin(dD), tEnd = tj + wD * 60000;
       if (!best || tEnd < best.tEnd) {
@@ -1036,6 +1065,7 @@ async function runSearch() {
     const iv = setInterval(() => setStatus('正在準備全港巴士路線資料（第一次要下載較多，約 1 至 3 分鐘，請不要關閉頁面）。' + dbProg), 700);
     let nt;
     try { nt = await loadDb(); } finally { clearInterval(iv); }
+    applyJourneyTimes();
     const r = +$('#rad').value, maxRides = +$('#maxTr').value + 1, trM = +$('#trWalk').value * WALK_M_PER_MIN / DETOUR;
     const oNear = nearStops(nt.stops, pts.o.lat, pts.o.lng, r);
     const dNear = nearStops(nt.stops, pts.d.lat, pts.d.lng, r);
@@ -1165,28 +1195,43 @@ const minTxt = m => (m < 1 ? '即將到' : m + ' 分鐘');
 const rtBadge = r => `<span class="rt${isKmb(r) ? '' : ' c'}">${esc(r.route)}</span>`;
 /* ---------- 車費：運輸署路線資料的「全程車費」（只供參考）。只抽出「公司|路線|方向 → 車費」，存在手機 7 日 ---------- */
 const FARE_URL = 'https://static.data.gov.hk/td/routes-fares-geojson/JSON_BUS.json';
-let fareMap = null, farePromise = null;
+let fareMap = null, jtMap = null, farePromise = null;
 function loadFares() {
   if (farePromise) return farePromise;
   farePromise = (async () => {
-    try { const c = await idbGet('fares1'); if (c && c.m && Date.now() - c.t < 7 * 864e5) { fareMap = new Map(c.m); return fareMap; } } catch (e) { /* 沒有暫存也沒關係 */ }
+    try { const c = await idbGet('fares2'); if (c && c.m && c.j && Date.now() - c.t < 7 * 864e5) { fareMap = new Map(c.m); jtMap = new Map(c.j); return fareMap; } } catch (e) { /* 沒有暫存也沒關係 */ }
     const j = await getJSON(FARE_URL, 180000, 2);
-    const m = new Map();
+    const m = new Map(), jm = new Map();
     for (const f of (j.features || [])) {
-      const q = f.properties || {}, fare = parseFloat(q.fullFare);
-      if (!(fare > 0)) continue;
+      const q = f.properties || {}, fare = parseFloat(q.fullFare), jt = parseFloat(q.journeyTime);
       for (const fam of String(q.companyCode || '').split('+').map(c => c === 'LWB' ? 'KMB' : c).filter(c => c === 'KMB' || c === 'CTB')) {
         const k1 = fam + '|' + q.routeNameC + '|' + q.routeSeq, k2 = fam + '|' + q.routeNameC;
-        if (!m.has(k1)) m.set(k1, fare);
-        if (!m.has(k2)) m.set(k2, fare);
+        if (fare > 0) { if (!m.has(k1)) m.set(k1, fare); if (!m.has(k2)) m.set(k2, fare); }
+        if (jt > 0) { if (!jm.has(k1)) jm.set(k1, jt); if (!jm.has(k2)) jm.set(k2, jt); }
       }
     }
-    fareMap = m;
-    try { await idbSet('fares1', { t: Date.now(), m: [...m] }); } catch (e) { /* 存不了也沒關係 */ }
+    fareMap = m; jtMap = jm;
+    try { await idbSet('fares2', { t: Date.now(), m: [...m], j: [...jm] }); } catch (e) { /* 存不了也沒關係 */ }
     return m;
   })();
   farePromise.catch(() => { farePromise = null; });
   return farePromise;
+}
+/* 用運輸署的「全程行車時間」校正每條路線各站之間的估計行車時間（取代固定車速 6 米／秒）。只做一次，限制在 0.5 至 2.5 倍之間 */
+function applyJourneyTimes() {
+  if (!net || !jtMap) return 0;
+  let n = 0;
+  for (const r of net.routes) {
+    if (r.jtDone) continue;
+    r.jtDone = true;
+    const fam = isKmb(r) ? 'KMB' : 'CTB', b = r.bound && r.bound[r.co[0]];
+    const jt = jtMap.get(fam + '|' + r.route + '|' + (b === 'I' ? 2 : 1)) ?? jtMap.get(fam + '|' + r.route);
+    const tot = r.cum[r.cum.length - 1];
+    if (!(jt > 0) || !(tot > 0)) continue;
+    const f = Math.min(2.5, Math.max(0.5, jt * 60 / tot));
+    r.cum = r.cum.map(v => v * f); r.jf = f; n++;
+  }
+  return n;
 }
 function fareOf(r) {
   if (!fareMap) return null;
@@ -1269,7 +1314,8 @@ const tests = [
     const nt = await loadDb(); await loadFares();
     const c = { kmb: [0, 0], ctb: [0, 0] }, miss = [];
     for (const r of nt.routes) { const k = isKmb(r) ? 'kmb' : 'ctb'; c[k][1]++; if (fareOf(r) != null) c[k][0]++; else if (miss.length < 8) miss.push((isKmb(r) ? '九' : '城') + r.route); }
-    return `車費 ${fareMap.size} 筆；九巴／龍運 ${c.kmb[0]}／${c.kmb[1]} 條有車費；城巴 ${c.ctb[0]}／${c.ctb[1]} 條有車費；配不到例：${miss.join('、') || '無'}`;
+    const nj = applyJourneyTimes(), fs = nt.routes.filter(r => r.jf).map(r => r.jf).sort((a, b) => a - b);
+    return `行車時間已校正 ${nj} 條路線（校正倍數中位數 ${fs.length ? fs[fs.length >> 1].toFixed(2) : '無'}）；車費 ${fareMap.size} 筆；九巴／龍運 ${c.kmb[0]}／${c.kmb[1]} 條有車費；城巴 ${c.ctb[0]}／${c.ctb[1]} 條有車費；配不到例：${miss.join('、') || '無'}`;
   }],
   ['Map API 步行路線服務', async () => {
     const base = 'https://mapapi.hkmapservice.gov.hk/PedRoute/NAServer/route/';
@@ -1418,7 +1464,7 @@ $('#copyDiag').onclick = copyDiag;
 syncX('o');
 useGpsAsOrigin(true).then(ok => { if (!ok && !pts.o) refreshGo(); });
 loadDb().catch(() => { /* 搜索時會再顯示錯誤 */ });
-setTimeout(() => { loadFares().then(() => { try { if (current && current.length && searchState) renderResults(); } catch (e) {} }).catch(() => {}); }, 3000);
+setTimeout(() => { loadFares().then(() => { try { applyJourneyTimes(); } catch (e) {} try { if (current && current.length && searchState) renderResults(); } catch (e) {} }).catch(() => {}); }, 3000);
 </script>
 </body>
 </html>
