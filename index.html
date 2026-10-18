@@ -72,7 +72,10 @@ details .field{margin-top:8px}
 .res .tot{font-size:17px}.res .tot b{font-size:24px;font-variant-numeric:tabular-nums}
 .res .nx{font-size:14px;color:var(--muted);white-space:nowrap}
 .dbg{font-size:12px;color:var(--muted);margin-top:8px}.dbg div{margin-top:3px}
-.res .fare{font-size:17px;font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
+.res{position:relative}
+.res .fare{position:absolute;top:10px;right:12px;font-size:17px;font-weight:700;font-variant-numeric:tabular-nums}
+.res .top{padding-right:68px}
+.res .trw{font-size:15px}
 .eta{display:inline-block;padding:2px 10px;border-radius:8px;font-size:20px;font-weight:800;line-height:1.3;font-variant-numeric:tabular-nums;vertical-align:middle}
 .eta.y{background:#f7c600;color:#2b2200}
 .eta.g{background:#1f9d55;color:#fff}
@@ -99,7 +102,7 @@ textarea{width:100%;min-height:140px;padding:8px;border:1px solid var(--line);bo
 </head>
 <body>
 <div class="wrap">
-<header><h1>樂悠巴</h1><span class="ver">測試版 v9.7</span></header>
+<header><h1>樂悠巴</h1><span class="ver">測試版 v9.8</span></header>
 <div id="envWarn" class="banner" hidden></div>
 <div class="tabs" role="tablist">
   <button id="tabSearch" role="tab" aria-selected="true">查路線</button>
@@ -1274,12 +1277,12 @@ function renderResults() {
       const bs = nt.stops.get(l.r.stops[l.i]), as = nt.stops.get(l.r.stops[l.j]);
       const sched = l.board.rmk && l.board.rmk.indexOf('原定') >= 0 ? '（原定班次）' : '';
       const w = Math.max(0, Math.round(l.wait / 60000));
-      return (k > 0 ? `<div class="sub">轉乘 ${esc(l.r.route)}：預計等候約 <span class="wt ${w < 5 ? 'y' : 'g'}">${w} 分鐘</span></div>` : '') +
+      return (k > 0 ? `<div class="sub trw">轉乘 ${esc(l.r.route)}：預計等候約 <span class="wt ${w < 5 ? 'y' : 'g'}">${w} 分鐘</span></div>` : '') +
         `<div class="sub">${rtBadge(l.r)}${isKmb(l.r) ? '' : '（城巴）'} 往${esc(l.r.dest)}：「${esc(bs.name)}」上車（${minTxt(l.nextMin)}${l.next2Min != null ? '、' + minTxt(l.next2Min) : ''}${sched}），乘 ${l.nStops} 站，「${esc(as.name)}」下車${l.est ? '（後段行車時間估算）' : ''}${l.synth ? '（班次按間隔估算）' : ''}</div>`;
     }).join('');
     return `<div class="res" role="button" tabindex="0" data-idx="${idx}" aria-selected="${idx === selectedIdx}">
       <div class="top"><div class="tot">約 <b>${mins}</b> 分鐘${ev.transfers ? (tag ? '' : `<span class="tag">轉${ev.transfers}次車</span>`) : '<span class="tag">直達</span>'}${tag ? `<span class="tag good">${esc(tag)}</span>` : ''}${ev.est ? '<span class="tag warn">含估算</span>' : ''}</div>
-      <div style="text-align:right"><div class="fare">${fareTxt(ev)}</div><div class="nx">下一班 ${etaPill(first.nextMin)}${first.next2Min != null ? ' <span class="nx2">再下一班 ' + minTxt(first.next2Min) + '</span>' : ''}</div></div></div>
+      <div class="fare">${fareTxt(ev)}</div><div class="nx">下一班 ${etaPill(first.nextMin)}${first.next2Min != null ? ' <span class="nx2">再下一班 ' + minTxt(first.next2Min) + '</span>' : ''}</div></div>
       <div class="line">${flow}</div>${detail}</div>`;
   };
   const dHtml = current.slice(0, shownD).map((x, k) => card(x, k)).join('');
@@ -1482,6 +1485,13 @@ $('#copyDiag').onclick = copyDiag;
 syncX('o');
 useGpsAsOrigin(true).then(ok => { if (!ok && !pts.o) refreshGo(); });
 loadDb().catch(() => { /* 搜索時會再顯示錯誤 */ });
+{ // 記住設定：轉車上限、轉車步行、範圍、只顯示全程實時（存在這部手機的瀏覽器，重新整理不會重置）
+  const KEY = 'lyb_settings', ids = ['maxTr', 'trWalk', 'rad'];
+  let saved = {}; try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) { /* 讀不到就用預設 */ }
+  const save = () => { try { const o = { strict: $('#strict').checked }; ids.forEach(id => { o[id] = $('#' + id).value; }); localStorage.setItem(KEY, JSON.stringify(o)); } catch (e) { /* 存不了也沒關係 */ } };
+  ids.forEach(id => { const el = $('#' + id); if (saved[id] != null && [...el.options].some(o => o.value === saved[id])) el.value = saved[id]; el.addEventListener('change', save); });
+  $('#strict').checked = !!saved.strict; $('#strict').addEventListener('change', save);
+}
 setTimeout(() => { loadFares().then(() => { try { applyJourneyTimes(); } catch (e) {} try { if (current && current.length && searchState) renderResults(); } catch (e) {} }).catch(() => {}); }, 3000);
 </script>
 </body>
