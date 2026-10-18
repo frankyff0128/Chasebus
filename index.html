@@ -73,9 +73,12 @@ details .field{margin-top:8px}
 .res .nx{font-size:14px;color:var(--muted);white-space:nowrap}
 .dbg{font-size:12px;color:var(--muted);margin-top:8px}.dbg div{margin-top:3px}
 .res{position:relative}
-.res .fare{position:absolute;top:10px;right:12px;font-size:17px;font-weight:700;font-variant-numeric:tabular-nums}
+.res .fare{position:absolute;top:10px;right:12px;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
 .res .top{padding-right:68px}
-.res .trw{font-size:15px}
+.res .sub.trw{font-size:16px}
+.res .sub .tstop{font-size:15px;font-weight:600;color:var(--fg)}
+@media (prefers-color-scheme:dark){.res .sub .tstop{color:#fff}}
+.tag.sm{font-size:10px}
 .eta{display:inline-block;padding:2px 10px;border-radius:8px;font-size:20px;font-weight:800;line-height:1.3;font-variant-numeric:tabular-nums;vertical-align:middle}
 .eta.y{background:#f7c600;color:#2b2200}
 .eta.g{background:#1f9d55;color:#fff}
@@ -102,7 +105,7 @@ textarea{width:100%;min-height:140px;padding:8px;border:1px solid var(--line);bo
 </head>
 <body>
 <div class="wrap">
-<header><h1>樂悠巴</h1><span class="ver">測試版 v9.8</span></header>
+<header><h1>樂悠巴</h1><span class="ver">測試版 v9.9</span></header>
 <div id="envWarn" class="banner" hidden></div>
 <div class="tabs" role="tablist">
   <button id="tabSearch" role="tab" aria-selected="true">查路線</button>
@@ -128,8 +131,6 @@ textarea{width:100%;min-height:140px;padding:8px;border:1px solid var(--line);bo
         <select id="maxTr"><option value="0">不轉車（只看直達）</option><option value="1">1 次</option><option value="2">2 次</option><option value="3" selected>3 次</option><option value="4">4 次</option><option value="5">5 次</option></select></div>
       <div class="field"><label for="trWalk">轉車時最多步行</label>
         <select id="trWalk"><option value="3">3 分鐘</option><option value="5" selected>5 分鐘</option><option value="8">8 分鐘</option><option value="10">10 分鐘</option></select></div>
-      <div class="field"><label><input type="checkbox" id="strict"> 只顯示行車時間全程都有實時預報的方案（結果會少很多）</label>
-        <span class="hint">官方到站預報只列出每個站接下來的幾班車，長途行程的後段常常沒有預報，那部分會按前段的實際車速推算，並標示「含估算」。</span></div>
       <div class="field"><label for="rad">起點、終點旁邊找巴士站的範圍</label>
         <select id="rad"><option value="500">500 米</option><option value="800">800 米</option><option value="1000" selected>1 公里</option><option value="1500">1.5 公里</option></select></div>
     </details>
@@ -595,26 +596,99 @@ function segRatio(A, B, est) {
   }
   return best && best.med > 0.4 * est && best.med < 2.5 * est ? best.med / est : null;
 }
+function flowRatio(listAt, i, j, cum, fallback) {
+  const rs = [];
+  for (let p = i; p < j; p++) {
+    const A = listAt(p); if (!A || !A.length) continue;
+    for (let g = 1; g <= CTB_GAP && p + g <= j; g++) {
+      const B = listAt(p + g);
+      if (B && B.length) { const x = segRatio(A, B, cum[p + g] - cum[p]); if (x != null) rs.push(x); break; }
+    }
+  }
+  if (rs.length >= 2) { rs.sort((a, b) => a - b); return rs[rs.length >> 1]; }
+  return fallback;
+}
 function extrapolate(m, i, j, cum, t0, listAt) {
   let q = i, tq = t0;
   for (const [p, tp] of m) if (p >= q && p <= j) { q = p; tq = tp; }
   let ratio = 1;
   const stat = cum[q] - cum[i];
   if (stat > 120) ratio = (tq - t0) / 1000 / stat;
-  if (listAt) {
-    const rs = [];
-    for (let p = i; p < j; p++) {
-      const A = listAt(p); if (!A || !A.length) continue;
-      for (let g = 1; g <= CTB_GAP && p + g <= j; g++) {
-        const B = listAt(p + g);
-        if (B && B.length) { const x = segRatio(A, B, cum[p + g] - cum[p]); if (x != null) rs.push(x); break; }
-      }
-    }
-    if (rs.length >= 2) { rs.sort((a, b) => a - b); ratio = rs[rs.length >> 1]; }
-  }
+  if (listAt) ratio = flowRatio(listAt, i, j, cum, ratio);
   ratio = Math.min(1.8, Math.max(0.6, ratio));
   return tq + (cum[j] - cum[q]) * 1000 * ratio;
 }
+
+/* ---------- 逐步搜索（追巴士）----------
+   像真人一樣：從起點出發，每到一個站（包括下車後走到鄰近的站），就看那一刻有哪些路線能接，
+   取每條路線下一班能趕上的車，算出它到沿途各站的時間；每個站只記住最早到達的時間；
+   重複到轉車上限，把能走到終點的組合挑出來，再交給原本的精算（evalPlan）重新計算。
+   第一步只用已經查到的實時資料，不增加查詢。 */
+function rideTimes(r, i, last, t0, store) {
+  const listAt = p => etaAt(r, p, store);
+  const m = isKmb(r) ? chainAll(listAt, i, last, r.cum, t0) : chainSparse(listAt, sampleIdx(i, last, CTB_GAP), r.cum, t0, 0.4);
+  let q = i, tq = t0;
+  for (const [p, tp] of m) if (p > q) { q = p; tq = tp; }
+  const stat = r.cum[q] - r.cum[i];
+  const ratio = Math.min(1.8, Math.max(0.6, flowRatio(listAt, i, last, r.cum, stat > 120 ? (tq - t0) / 1000 / stat : 1)));
+  const out = new Array(last + 1).fill(0);
+  let cq = i, cT = t0;
+  for (let j = i + 1; j <= last; j++) {
+    if (m.has(j)) { cq = j; cT = m.get(j); out[j] = cT; } else out[j] = cT + (r.cum[j] - r.cum[cq]) * 1000 * ratio;
+  }
+  return out;
+}
+const planKey = p => p.legs.map(l => l.r.id + ':' + l.i + '-' + l.j).join('|');
+function chaseSearch(nt, store, ctx, oNear, dNear, maxRides, transferM) {
+  const { now } = ctx, nb = neighborsOf(nt, transferM);
+  const dDest = new Map(), bestAt = new Map();
+  for (const [id, d] of dNear) { const k = nt.sidx.get(id); if (k !== undefined) dDest.set(k, d); }
+  let front = new Map();
+  [...oNear.entries()].sort((a, b) => a[1] - b[1]).slice(0, 25).forEach(([id, d]) => {
+    const k = nt.sidx.get(id), s = nt.stops.get(id); if (k === undefined) return;
+    const t = now + (ctx.o ? realMin(ctx.o, s, d, true) : walkTr(d)) * 60000;
+    front.set(k, { t, legs: [], dO: d }); bestAt.set(k, t);
+  });
+  const found = [];
+  for (let k = 1; k <= maxRides; k++) {
+    const next = new Map();
+    const relax = (sx, t, legs, dO) => {
+      const g = bestAt.get(sx), cur = next.get(sx);
+      if ((g !== undefined && g <= t) || (cur && cur.t <= t)) return;
+      next.set(sx, { t, legs, dO });
+    };
+    for (const [sx, lab] of front) {
+      for (const [ri, pi] of nt.routesAt[sx]) {
+        const r = nt.routes[ri];
+        if (lab.legs.some(l => l.r.route === r.route)) continue;
+        const list = etaAt(r, pi, store);
+        if (!list || !list.length) continue;
+        const pb = pickBus(list, lab.t + (k > 1 ? TRANSFER_BUF_MS : 0), false);
+        if (!pb) continue;
+        const last = r.stops.length - 1, times = rideTimes(r, pi, last, pb.pick.t, store);
+        for (let j = pi + 1; j <= last; j++) {
+          const tj = times[j]; if (!(tj > 0)) continue;
+          const s2 = r.sIdx[j], legs = lab.legs.concat([{ r, i: pi, j }]);
+          if (dDest.has(s2)) {
+            const dD = dDest.get(s2), sd = nt.stops.get(r.stops[j]);
+            found.push({ legs, dO: lab.dO, dD, est: 0, tEnd: tj + (ctx.d ? realMin(sd, ctx.d, dD, false) : walkMin(dD)) * 60000 });
+          }
+          if (k < maxRides) {
+            relax(s2, tj, legs, lab.dO);
+            for (const [nx, d] of nb[s2]) relax(nx, tj + walkTr(d) * 60000, legs, lab.dO);
+          }
+        }
+      }
+    }
+    for (const [sx, lab] of next) { const g = bestAt.get(sx); if (g === undefined || lab.t < g) bestAt.set(sx, lab.t); }
+    front = next;
+  }
+  found.sort((a, b) => a.tEnd - b.tEnd);
+  const seen = new Set(), out = [];
+  for (const f of found) { const key = planKey(f); if (!seen.has(key)) { seen.add(key); out.push(f); } }
+  return out;
+}
+
 /* 一程巴士從第 L.i 站（上車時間 t0）到第 L.j 站的到達時間。回傳 {t, est}；est 為 true 表示含推算 */
 function rideArrive(L, t0, store) {
   const r = L.r;
@@ -1039,7 +1113,7 @@ function onType(which) {
 }
 
 /* ---------- 搜索 ---------- */
-let directReport = []; let current = []; let nDirect = 0, shownD = 0, shownT = 0; let selectedIdx = -1; let searchState = null;
+let chaseInfo = ''; let directReport = []; let current = []; let nDirect = 0, shownD = 0, shownT = 0; let selectedIdx = -1; let searchState = null;
 const LEG_COLORS = ['#2a5db0', '#6b4aa8', '#c2410c', '#0f766e', '#a21caf', '#4d7c0f'];
 
 async function pool(items, n, fn, onDone) {
@@ -1111,7 +1185,7 @@ async function runSearch() {
     const now = Date.now();
     const ctx = { now, store, stops: nt.stops, o: pts.o, d: pts.d };
     const drops = { nodata: 0, nobus: 0, nochain: 0, slower: 0, est: 0 };
-    const strict = $('#strict').checked;
+    const strict = false;
     const D = [], T = [];
     const note = (ev) => { drops[ev.drop]++; };
     const bestBy = new Map(), dropBy = new Map(), report = [];
@@ -1198,7 +1272,15 @@ async function runSearch() {
         for (let n = 0; n < Ls.length - 1; n++) pairs.push([sg(Ls[n], Ls[n].j), sg(Ls[n + 1], Ls[n + 1].i)]);
         pairs.push([sg(Ls[Ls.length - 1], Ls[Ls.length - 1].j), pts.d]); }
       await prefetchWalk(pairs.slice(0, 160), '查詢轉乘步行距離'); }
-    for (const p of chosen) { const ev = evalPlan(p, ctx); if (ev.drop) note(ev); else if (strict && ev.est) drops.est++; else T.push({ plan: p, ev }); }
+    for (const p of chosen) { const ev = evalPlan(p, ctx); if (ev.drop) note(ev); else T.push({ plan: p, ev }); }
+    try { // 逐步搜索：補上舊算法沒列出的組合
+      const have = new Set(T.map(x => planKey(x.plan)));
+      const cs = chaseSearch(nt, store, ctx, oNear, dNear, maxRides, trM);
+      const extra = cs.filter(p => !have.has(planKey(p))).slice(0, 80);
+      let added = 0;
+      for (const p of extra) { const ev = evalPlan(p, ctx); if (!ev.drop) { T.push({ plan: p, ev }); added++; } }
+      chaseInfo = `逐步搜索：找到 ${cs.length} 個到達終點的組合，其中 ${extra.length} 個舊算法沒有列出，評估後新增 ${added} 個方案`;
+    } catch (e) { chaseInfo = '逐步搜索出錯：' + e.message; }
     show(true);
   } catch (e) {
     setStatus('搜索失敗：' + e.message + '。請到「資料測試」分頁看看是哪一項不能用。');
@@ -1278,10 +1360,10 @@ function renderResults() {
       const sched = l.board.rmk && l.board.rmk.indexOf('原定') >= 0 ? '（原定班次）' : '';
       const w = Math.max(0, Math.round(l.wait / 60000));
       return (k > 0 ? `<div class="sub trw">轉乘 ${esc(l.r.route)}：預計等候約 <span class="wt ${w < 5 ? 'y' : 'g'}">${w} 分鐘</span></div>` : '') +
-        `<div class="sub">${rtBadge(l.r)}${isKmb(l.r) ? '' : '（城巴）'} 往${esc(l.r.dest)}：「${esc(bs.name)}」上車（${minTxt(l.nextMin)}${l.next2Min != null ? '、' + minTxt(l.next2Min) : ''}${sched}），乘 ${l.nStops} 站，「${esc(as.name)}」下車${l.est ? '（後段行車時間估算）' : ''}${l.synth ? '（班次按間隔估算）' : ''}</div>`;
+        `<div class="sub">${rtBadge(l.r)}${isKmb(l.r) ? '' : '（城巴）'} 往${esc(l.r.dest)}：「${esc(bs.name)}」上車（${minTxt(l.nextMin)}${l.next2Min != null ? '、' + minTxt(l.next2Min) : ''}${sched}），乘 ${l.nStops} 站，「${k < ev.legs.length - 1 ? `<span class="tstop">${esc(as.name)}</span>` : esc(as.name)}」下車${l.est ? '（後段行車時間估算）' : ''}${l.synth ? '（班次按間隔估算）' : ''}</div>`;
     }).join('');
     return `<div class="res" role="button" tabindex="0" data-idx="${idx}" aria-selected="${idx === selectedIdx}">
-      <div class="top"><div class="tot">約 <b>${mins}</b> 分鐘${ev.transfers ? (tag ? '' : `<span class="tag">轉${ev.transfers}次車</span>`) : '<span class="tag">直達</span>'}${tag ? `<span class="tag good">${esc(tag)}</span>` : ''}${ev.est ? '<span class="tag warn">含估算</span>' : ''}</div>
+      <div class="top"><div class="tot">約 <b>${mins}</b> 分鐘${ev.transfers ? (tag ? '' : `<span class="tag">轉${ev.transfers}次車</span>`) : '<span class="tag">直達</span>'}${tag ? `<span class="tag good${ev.transfers ? ' sm' : ''}">${esc(tag)}</span>` : ''}${ev.est ? '<span class="tag warn">含估算</span>' : ''}</div>
       <div class="fare">${fareTxt(ev)}</div><div class="nx">下一班 ${etaPill(first.nextMin)}${first.next2Min != null ? ' <span class="nx2">再下一班 ' + minTxt(first.next2Min) + '</span>' : ''}</div></div>
       <div class="line">${flow}</div>${detail}</div>`;
   };
@@ -1292,7 +1374,7 @@ function renderResults() {
     (nDirect ? `<div class="grp">直達路線（置頂）</div>` + dHtml : '') +
     (current.length > nDirect ? `<div class="grp">轉乘方案（都比最快直達快，轉乘空隙至少 3 分鐘）</div>` + tHtml : '') +
     (rest > 0 ? `<button class="b" id="more" style="width:100%">顯示更多（還有 ${rest} 個）</button>` : '') +
-    `<details class="dbg"><summary>直達檢查（除錯用）：起終點附近靜態找到 ${directReport.length} 個直達方案</summary>${directReport.length ? directReport.map(x => '<div>' + esc(x) + '</div>').join('') : '<div>找不到任何直達路線：起點和終點附近沒有同一條路線經過。</div>'}</details>`;
+    `<details class="dbg"><summary>直達檢查（除錯用）：起終點附近靜態找到 ${directReport.length} 個直達方案</summary><div>${esc(chaseInfo)}</div>${directReport.length ? directReport.map(x => '<div>' + esc(x) + '</div>').join('') : '<div>找不到任何直達路線：起點和終點附近沒有同一條路線經過。</div>'}</details>`;
   const more = $('#more');
   if (more) more.onclick = () => { shownD = Math.min(nDirect, shownD + 5); shownT = Math.min(current.length - nDirect, shownT + 10); renderResults(); };
 }
@@ -1488,9 +1570,8 @@ loadDb().catch(() => { /* 搜索時會再顯示錯誤 */ });
 { // 記住設定：轉車上限、轉車步行、範圍、只顯示全程實時（存在這部手機的瀏覽器，重新整理不會重置）
   const KEY = 'lyb_settings', ids = ['maxTr', 'trWalk', 'rad'];
   let saved = {}; try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) { /* 讀不到就用預設 */ }
-  const save = () => { try { const o = { strict: $('#strict').checked }; ids.forEach(id => { o[id] = $('#' + id).value; }); localStorage.setItem(KEY, JSON.stringify(o)); } catch (e) { /* 存不了也沒關係 */ } };
+  const save = () => { try { const o = {}; ids.forEach(id => { o[id] = $('#' + id).value; }); localStorage.setItem(KEY, JSON.stringify(o)); } catch (e) { /* 存不了也沒關係 */ } };
   ids.forEach(id => { const el = $('#' + id); if (saved[id] != null && [...el.options].some(o => o.value === saved[id])) el.value = saved[id]; el.addEventListener('change', save); });
-  $('#strict').checked = !!saved.strict; $('#strict').addEventListener('change', save);
 }
 setTimeout(() => { loadFares().then(() => { try { applyJourneyTimes(); } catch (e) {} try { if (current && current.length && searchState) renderResults(); } catch (e) {} }).catch(() => {}); }, 3000);
 </script>
