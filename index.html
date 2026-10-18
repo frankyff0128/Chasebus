@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>樂悠巴</title>
+<title>飛巴</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
 :root{
@@ -56,6 +56,7 @@ summary{cursor:pointer;color:var(--muted);font-weight:600;padding:4px 0}
 details .field{margin-top:8px}
 #mapWrap{position:relative;margin-bottom:10px}
 #map{height:46vh;min-height:300px;border-radius:10px;border:1px solid var(--line);z-index:0}
+#mapWrap .fsbtn{width:36px;height:36px;border:2px solid rgba(0,0,0,.25);border-radius:6px;background:#fff;color:#222;font-size:20px;line-height:1;cursor:pointer;padding:0}
 #mapWrap.full{position:fixed;inset:0;z-index:2000;margin:0;background:var(--bg)}
 #mapWrap.full #map{height:100%;min-height:0;border-radius:0;border:0}
 .pickbar{position:absolute;left:0;right:0;z-index:1500;display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--card);color:var(--fg);box-shadow:0 2px 8px rgba(0,0,0,.25)}
@@ -105,7 +106,7 @@ textarea{width:100%;min-height:140px;padding:8px;border:1px solid var(--line);bo
 </head>
 <body>
 <div class="wrap">
-<header><h1>樂悠巴</h1><span class="ver">測試版 v9.10</span></header>
+<header><h1>飛巴</h1><span class="ver">v10</span></header>
 <div id="envWarn" class="banner" hidden></div>
 <div class="tabs" role="tablist">
   <button id="tabSearch" role="tab" aria-selected="true">查路線</button>
@@ -934,6 +935,19 @@ const TILE_BASE = 'https://mapapi.geodata.gov.hk/gs/api/v1.0.0/xyz/basemap/wgs84
 const TILE_LABEL = 'https://mapapi.geodata.gov.hk/gs/api/v1.0.0/xyz/label/hk/tc/wgs84/{z}/{x}/{y}.png';
 const baseLayer = L.tileLayer(TILE_BASE, { minZoom: 10, maxZoom: 20, bounds: HK_BOUNDS.pad(0.1), zIndex: 1 }).addTo(map);
 L.tileLayer(TILE_LABEL, { minZoom: 10, maxZoom: 20, bounds: HK_BOUNDS.pad(0.1), zIndex: 2 }).addTo(map);
+{ // 右下角：地圖放大至全螢幕／還原
+  const C = L.control({ position: 'bottomright' });
+  C.onAdd = () => {
+    const b = L.DomUtil.create('button', 'fsbtn');
+    b.type = 'button'; b.title = '地圖放大至全螢幕'; b.setAttribute('aria-label', '地圖放大至全螢幕');
+    const w = $('#mapWrap'), sync = () => { b.textContent = w.classList.contains('full') ? '✕' : '⛶'; setTimeout(() => map.invalidateSize(), 50); };
+    L.DomEvent.disableClickPropagation(b);
+    b.onclick = () => { w.classList.toggle('full'); sync(); };
+    new MutationObserver(sync).observe(w, { attributes: true, attributeFilter: ['class'] });
+    sync(); return b;
+  };
+  C.addTo(map);
+}
 { // 如果底圖一張都載入不了，在頁面頂部提示（不影響搜索巴士）
   let ok = 0, bad = 0;
   baseLayer.on('tileload', () => { ok++; });
@@ -1235,6 +1249,15 @@ async function runSearch() {
       smartSort(D);
       const T2 = T.filter(x => bestD === null || rnd(x.ev) < bestD);
       smartSort(T2);
+      { // 合併：轉乘次數相同、最後一程是同一班車（同一路線同一上車站）的方案併成一張卡片，其餘路線列在「也可乘」，並顯示各自的候車時間
+        const gm = new Map(), grouped = [];
+        for (const x of T2) {
+          const L = x.plan.legs[x.plan.legs.length - 1], k = x.ev.transfers + '|' + L.r.id + '|' + L.i;
+          const reps = gm.get(k) || [], g = reps.find(q => rnd(x.ev) - rnd(q.ev) <= 5);
+          if (g) { if (g.alts.length < 4) g.alts.push(x); } else { x.alts = []; reps.push(x); gm.set(k, reps); grouped.push(x); }
+        }
+        T2.splice(0, T2.length, ...grouped);
+      }
       drops.slower = T.length - T2.length;
       D.forEach(x => { x.tag = x === fastestD ? '最快直達' : ''; });
       T2.forEach(x => { x.tag = bestD === null ? '' : '轉' + x.ev.transfers + '次車快' + (bestD - rnd(x.ev)) + '分鐘'; });
@@ -1357,7 +1380,7 @@ function fareTxt(ev) {
 }
 function renderResults() {
   const box = $('#results');
-  const card = ({ ev, tag }, idx) => {
+  const card = ({ ev, tag, alts }, idx) => {
     const first = ev.legs[0], nt = searchState.net;
     const mins = Math.max(1, Math.round(ev.totalSec / 60));
     const fl = [`步行 ${ev.walkO} 分`];
@@ -1367,9 +1390,9 @@ function renderResults() {
       const bs = nt.stops.get(l.r.stops[l.i]), as = nt.stops.get(l.r.stops[l.j]);
       const sched = l.board.rmk && l.board.rmk.indexOf('原定') >= 0 ? '（原定班次）' : '';
       const w = Math.max(0, Math.round(l.wait / 60000));
-      return (k > 0 ? `<div class="sub trw">轉乘 ${esc(l.r.route)}：預計等候約 <span class="wt ${w < 5 ? 'y' : 'g'}">${w} 分鐘</span></div>` : '') +
+      return (k > 0 ? `<div class="sub trw">轉乘 ${esc(l.r.route)}：預計等候約 <span class="wt ${w < 5 ? 'y' : 'g'}">${w} 分鐘</span>${sched}</div>` : '') +
         `<div class="sub">${rtBadge(l.r)}${isKmb(l.r) ? '' : '（城巴）'} 往${esc(l.r.dest)}：「${k === 0 ? `<span class="tstop">${esc(bs.name)}</span>` : esc(bs.name)}」上車（${minTxt(l.nextMin)}${l.next2Min != null ? '、' + minTxt(l.next2Min) : ''}${sched}），乘 ${l.nStops} 站，「${k < ev.legs.length - 1 ? `<span class="tstop">${esc(as.name)}</span>` : esc(as.name)}」下車${l.est ? '（後段行車時間估算）' : ''}${l.synth ? '（班次按間隔估算）' : ''}</div>`;
-    }).join('');
+    }).join('') + ((alts && alts.length) ? `<div class="sub alts"><b>也可乘（趕同一班車）：</b>${alts.map(a => '<div>' + a.ev.legs.map(l => { const w = Math.max(0, Math.round(l.wait / 60000)); return rtBadge(l.r) + ' 候車 ' + w + ' 分' + (l.board.rmk && l.board.rmk.indexOf('原定') >= 0 ? '（原定班次）' : ''); }).join(' → ') + '，約 ' + Math.max(1, Math.round(a.ev.totalSec / 60)) + ' 分鐘</div>').join('')}</div>` : '');
     return `<div class="res" role="button" tabindex="0" data-idx="${idx}" aria-selected="${idx === selectedIdx}">
       <div class="top"><div class="tot">約 <b>${mins}</b> 分鐘${ev.transfers ? (tag ? '' : `<span class="tag">轉${ev.transfers}次車</span>`) : '<span class="tag">直達</span>'}${tag ? `<span class="tag good${ev.transfers ? ' sm' : ''}">${esc(tag)}</span>` : ''}${ev.est ? '<span class="tag warn">含估算</span>' : ''}</div>
       <div class="fare">${fareTxt(ev)}</div><div class="nx">下一班 ${etaPill(first.nextMin)}${first.next2Min != null ? ' <span class="nx2">再下一班 ' + minTxt(first.next2Min) + '</span>' : ''}</div></div>
@@ -1500,7 +1523,7 @@ async function runDiag() {
   const ul = $('#diagList'); ul.innerHTML = ''; diagLines.length = 0;
   $('#diagText').hidden = true;
   $('#runDiag').disabled = true;
-  diagLines.push('樂悠巴 資料測試 ' + new Date().toLocaleString('zh-HK') + '；網址 ' + location.origin);
+  diagLines.push('飛巴 資料測試 ' + new Date().toLocaleString('zh-HK') + '；網址 ' + location.origin);
   for (const [name, fn] of tests) {
     const li = document.createElement('li');
     li.innerHTML = `<span class="run">測試中…</span> ${esc(name)}`;
