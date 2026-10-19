@@ -108,7 +108,7 @@ textarea{width:100%;min-height:140px;padding:8px;border:1px solid var(--line);bo
 </head>
 <body>
 <div class="wrap">
-<header><h1>飛巴</h1><span class="ver">v10.1</span></header>
+<header><h1>飛巴</h1><span class="ver">v10.2</span></header>
 <div id="envWarn" class="banner" hidden></div>
 <div class="tabs" role="tablist">
   <button id="tabSearch" role="tab" aria-selected="true">查路線</button>
@@ -181,7 +181,8 @@ function hav(lat1, lon1, lat2, lon2) {
 }
 function walkMin(m) { return Math.max(1, Math.ceil(m * DETOUR / WALK_M_PER_MIN)); }
 /* 轉車步行：幾乎同一個位置就當作 0 分鐘 */
-function walkTr(m) { return m < 25 ? 0 : walkMin(m); }
+function walkTr(m) { return m < SAME_STOP_M ? 0 : walkMin(m); }
+const SAME_STOP_M = 100; // 相距不足 100 米的站視為同一個站
 /* ---------- 真實步行距離：地政總署 Map API 行人路線。查到就用，查不到就退回直線估算 ---------- */
 const PED = 'https://mapapi.hkmapservice.gov.hk/PedRoute/NAServer/route/';
 const pedCache = new Map(); let pedMode = null, pedFails = 0, pedOk = 0;
@@ -189,7 +190,7 @@ const pedKey = (a, b) => a.lat.toFixed(5) + ',' + a.lng.toFixed(5) + '|' + b.lat
 function realMin(a, b, fbM, transfer) {
   const m = pedCache.get(pedKey(a, b));
   if (m === undefined) return transfer ? walkTr(fbM) : walkMin(fbM);
-  return (transfer && m < 25) ? 0 : Math.max(1, Math.ceil(m / WALK_M_PER_MIN));
+  return (transfer && m < SAME_STOP_M) ? 0 : Math.max(1, Math.ceil(m / WALK_M_PER_MIN));
 }
 async function pedRoute(a, b) {
   const key = pedKey(a, b);
@@ -214,7 +215,7 @@ async function prefetchWalk(pairs, label) {
   for (const [a, b] of pairs) {
     if (!a || !b) continue;
     const k = pedKey(a, b);
-    if (seen.has(k) || pedCache.has(k) || hav(a.lat, a.lng, b.lat, b.lng) < 25) continue;
+    if (seen.has(k) || pedCache.has(k) || hav(a.lat, a.lng, b.lat, b.lng) < SAME_STOP_M) continue;
     seen.add(k); todo.push([a, b]);
   }
   if (!todo.length) return;
@@ -1124,7 +1125,7 @@ function onType(which) {
 }
 
 /* ---------- 搜索 ---------- */
-let chaseInfo = ''; let directReport = []; let current = []; let nDirect = 0, shownD = 0, shownT = 0; let selectedIdx = -1; let searchState = null;
+let dbgPlans = []; let chaseInfo = ''; let directReport = []; let current = []; let nDirect = 0, shownD = 0, shownT = 0; let selectedIdx = -1; let searchState = null;
 const LEG_COLORS = ['#2a5db0', '#6b4aa8', '#c2410c', '#0f766e', '#a21caf', '#4d7c0f'];
 
 async function pool(items, n, fn, onDone) {
@@ -1255,6 +1256,7 @@ async function runSearch() {
         }
         T2.splice(0, T2.length, ...grouped);
       }
+      dbgPlans = T2.slice(0, 10).map(x => { const L = x.plan.legs[x.plan.legs.length - 1], st = nt.stops.get(L.r.stops[L.j]); return x.ev.legs.map(l => l.r.route).join('→') + '：最後下車站「' + st.name + '」距終點約 ' + Math.round(x.plan.dD) + ' 米'; });
       drops.slower = T.length - T2.length;
       D.forEach(x => { x.tag = x === fastestD ? '最快直達' : ''; });
       T2.forEach(x => { x.tag = bestD === null ? '' : '轉' + x.ev.transfers + '次車快' + (bestD - rnd(x.ev)) + '分鐘'; });
@@ -1342,6 +1344,44 @@ async function runSearch() {
       }
       chaseInfo = `逐步搜索：找到 ${r1[0]} 個到達終點的組合，其中 ${r1[1]} 個舊算法沒有列出，新增 ${r1[2]} 個方案；轉乘站候車超過 5 分鐘的有 ${spots.size} 個，補查到終點的班次 ${todoN} 項，再新增 ${r2[2]} 個方案`;
     } catch (e) { chaseInfo = '逐步搜索出錯：' + e.message; }
+    try { // 規則 A：中途轉車必須比「留在同一班車直接坐到終點附近」快至少 4 分鐘；規則 B：每多轉一次車，要比較少轉車的最好方案快至少 3 分鐘
+      const GAIN_STAY = 4, GAIN_MORE = 3, nBefore = T.length, stayCache = new Map();
+      const stayBest = (plan, k) => {
+        const L = plan.legs[k], key = plan.legs.slice(0, k).map(q => q.r.id + ':' + q.i + '-' + q.j).join('|') + '|' + L.r.id + ':' + L.i;
+        if (stayCache.has(key)) return stayCache.get(key);
+        const c = [];
+        for (let j = L.i + 1; j < L.r.stops.length; j++) { const d = dNear.get(L.r.stops[j]); if (d !== undefined) c.push([j, d]); }
+        c.sort((a, b) => a[1] - b[1]);
+        let best = null;
+        for (const [j, d] of c.slice(0, 3)) {
+          const p = { legs: [...plan.legs.slice(0, k), { r: L.r, i: L.i, j }], dO: plan.dO, dD: d, est: 0 };
+          const ev = evalPlan(p, ctx);
+          if (!ev.drop && (!best || rnd(ev) < rnd(best.ev))) best = { plan: p, ev };
+        }
+        stayCache.set(key, best); return best;
+      };
+      for (let pass = 0; pass < 2; pass++) {
+        const keep = [], adds = [], seenK = new Set(T.map(x => planKey(x.plan)));
+        for (const x of T) {
+          let ok = true;
+          for (let k = 0; k < x.plan.legs.length - 1 && ok; k++) {
+            const st = stayBest(x.plan, k); if (!st) continue;
+            if (rnd(x.ev) > rnd(st.ev) - GAIN_STAY) ok = false;
+            const sk = planKey(st.plan); if (!seenK.has(sk)) { seenK.add(sk); adds.push(st); }
+          }
+          if (ok) keep.push(x);
+        }
+        T.length = 0; T.push(...keep, ...adds);
+      }
+      let bestLess = Infinity;
+      const maxN = Math.max(0, ...T.map(x => x.ev.transfers));
+      for (let n = 1; n <= maxN; n++) {
+        let g = T.filter(x => x.ev.transfers === n);
+        if (n >= 2 && bestLess < Infinity) { const out = new Set(g.filter(x => rnd(x.ev) > bestLess - GAIN_MORE)); T.splice(0, T.length, ...T.filter(x => !out.has(x))); g = g.filter(x => !out.has(x)); }
+        if (g.length) bestLess = Math.min(bestLess, ...g.map(x => rnd(x.ev)));
+      }
+      chaseInfo += `；規則過濾：轉車前 ${nBefore} 個方案，之後 ${T.length} 個`;
+    } catch (e) { chaseInfo += '；轉車規則出錯：' + e.message; }
     show(true);
   } catch (e) {
     setStatus('搜索失敗：' + e.message + '。請到「資料測試」分頁看看是哪一項不能用。');
@@ -1435,7 +1475,7 @@ function renderResults() {
     (nDirect ? `<div class="grp">直達路線（置頂）</div>` + dHtml : '') +
     (current.length > nDirect ? `<div class="grp">轉乘方案（都比最快直達快，轉乘空隙至少 3 分鐘）</div>` + tHtml : '') +
     (rest > 0 ? `<button class="b" id="more" style="width:100%">顯示更多（還有 ${rest} 個）</button>` : '') +
-    `<details class="dbg"><summary>直達檢查（除錯用）：起終點附近靜態找到 ${directReport.length} 個直達方案</summary><div>${esc(chaseInfo)}</div>${directReport.length ? directReport.map(x => '<div>' + esc(x) + '</div>').join('') : '<div>找不到任何直達路線：起點和終點附近沒有同一條路線經過。</div>'}</details>`;
+    `<details class="dbg"><summary>直達檢查（除錯用）：起終點附近靜態找到 ${directReport.length} 個直達方案</summary><div>${esc(chaseInfo)}</div>${dbgPlans.map(x => '<div>' + esc(x) + '</div>').join('')}${directReport.length ? directReport.map(x => '<div>' + esc(x) + '</div>').join('') : '<div>找不到任何直達路線：起點和終點附近沒有同一條路線經過。</div>'}</details>`;
   const more = $('#more');
   if (more) more.onclick = () => { shownD = Math.min(nDirect, shownD + 5); shownT = Math.min(current.length - nDirect, shownT + 10); renderResults(); };
 }
