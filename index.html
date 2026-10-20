@@ -108,7 +108,7 @@ textarea{width:100%;min-height:140px;padding:8px;border:1px solid var(--line);bo
 </head>
 <body>
 <div class="wrap">
-<header><h1>飛巴</h1><span class="ver">v10.2</span></header>
+<header><h1>飛巴</h1><span class="ver">v10.3</span></header>
 <div id="envWarn" class="banner" hidden></div>
 <div class="tabs" role="tablist">
   <button id="tabSearch" role="tab" aria-selected="true">查路線</button>
@@ -1437,20 +1437,58 @@ function applyJourneyTimes() {
   }
   return n;
 }
-function fareOf(r) {
+/* ---------- 分段車費：hkbus 項目整理的「每個上車站的車費」（志願者維護的第三方資料，站編號與官方到站接口相同）---------- */
+const SEC_URLS = ['https://hkbus.github.io/hk-bus-crawling/routeFareList.min.json', 'https://data.hkbus.app/routeFareList.min.json'];
+let secMap = null, secPromise = null;
+function loadSection() {
+  if (secPromise) return secPromise;
+  secPromise = (async () => {
+    try { const c = await idbGet('fare_sec1'); if (c && c.s && Date.now() - c.t < 3 * 864e5) { secMap = new Map(c.s); return secMap; } } catch (e) { /* 沒有暫存也沒關係 */ }
+    let j = null, err = null;
+    for (const u of SEC_URLS) { try { j = await getJSON(u, 240000, 1); break; } catch (e) { err = e; } }
+    if (!j) throw err || new Error('讀不到分段車費資料');
+    const m = new Map();
+    for (const e of Object.values(j.routeList || {})) {
+      if (!Array.isArray(e.fares)) continue;
+      for (const c of (e.co || [])) {
+        if (c !== 'kmb' && c !== 'ctb') continue;
+        const st = e.stops && e.stops[c], b = e.bound && e.bound[c];
+        if (!st || !st.length || !b) continue;
+        const k = c + '|' + e.route + '|' + b, arr = m.get(k) || [];
+        arr.push({ n: st.length, a: st[0], z: st[st.length - 1], f: e.fares.map(Number) }); m.set(k, arr);
+      }
+    }
+    secMap = m;
+    try { await idbSet('fare_sec1', { t: Date.now(), s: [...m] }); } catch (e) { /* 存不了也沒關係 */ }
+    return m;
+  })();
+  secPromise.catch(() => { secPromise = null; });
+  return secPromise;
+}
+function secFare(r, i) {
+  if (!secMap || i == null) return null;
+  const c = r.co[0], arr = secMap.get(c + '|' + r.route + '|' + (r.bound && r.bound[c]));
+  if (!arr) return null;
+  const n = r.stops.length, a = r.stops[0], z = r.stops[n - 1];
+  const v = arr.find(x => x.n === n && x.a === a && x.z === z);
+  return v && v.f[i] > 0 ? v.f[i] : null;
+}
+function fareOf(r, i) {
+  const sf = secFare(r, i);
+  if (sf != null) return sf;
   if (!fareMap) return null;
   const fam = isKmb(r) ? 'KMB' : 'CTB', b = r.bound && r.bound[r.co[0]];
   const v = fareMap.get(fam + '|' + r.route + '|' + (b === 'I' ? 2 : 1));
   return v !== undefined ? v : (fareMap.get(fam + '|' + r.route) ?? null);
 }
-function fareTxt(ev) {
+function fareTxt(ev, plan) {
   let t = 0;
-  for (const l of ev.legs) { const f = fareOf(l.r); if (f == null) return '$?'; t += f; }
+  for (let k = 0; k < ev.legs.length; k++) { const f = fareOf(ev.legs[k].r, plan && plan.legs[k] ? plan.legs[k].i : null); if (f == null) return '$?'; t += f; }
   return '$' + (+t.toFixed(1));
 }
 function renderResults() {
   const box = $('#results');
-  const card = ({ ev, tag, alts }, idx) => {
+  const card = ({ ev, plan, tag, alts }, idx) => {
     const first = ev.legs[0], nt = searchState.net;
     const mins = Math.max(1, Math.round(ev.totalSec / 60));
     const fl = [`步行 ${ev.walkO} 分`];
@@ -1465,7 +1503,7 @@ function renderResults() {
     }).join('') + ((alts && alts.length) ? `<div class="sub alts"><b>也可乘（同樣上下車站、趕同一班車）：</b>${alts.map(a => '<div>' + a.ev.legs.map(l => { const w = Math.max(0, Math.round(l.wait / 60000)); return rtBadge(l.r) + ' 候車 <span class="wt ' + (w < 5 ? 'y' : 'g') + '">' + w + ' 分</span>' + (l.board.rmk && l.board.rmk.indexOf('原定') >= 0 ? '（原定班次）' : ''); }).join(' → ') + '，約 ' + Math.max(1, Math.round(a.ev.totalSec / 60)) + ' 分鐘</div>').join('')}</div>` : '');
     return `<div class="res" role="button" tabindex="0" data-idx="${idx}" aria-selected="${idx === selectedIdx}">
       <div class="top"><div class="tot">約 <b>${mins}</b> 分鐘${ev.transfers ? (tag ? '' : `<span class="tag">轉${ev.transfers}次車</span>`) : '<span class="tag">直達</span>'}${tag ? `<span class="tag good${ev.transfers ? ' sm' : ''}">${esc(tag)}</span>` : ''}${ev.est ? '<span class="tag warn">含估算</span>' : ''}</div>
-      <div class="fare">${fareTxt(ev)}</div><div class="nx">下一班 ${etaPill(first.nextMin)}${first.next2Min != null ? ' <span class="nx2">再下一班 ' + minTxt(first.next2Min) + '</span>' : ''}</div></div>
+      <div class="fare">${fareTxt(ev, plan)}</div><div class="nx">下一班 ${etaPill(first.nextMin)}${first.next2Min != null ? ' <span class="nx2">再下一班 ' + minTxt(first.next2Min) + '</span>' : ''}</div></div>
       <div class="line">${flow}</div>${detail}</div>`;
   };
   const dHtml = current.slice(0, shownD).map((x, k) => card(x, k)).join('');
@@ -1514,6 +1552,19 @@ function selectResult(idx) {
 /* ---------- 資料測試（只檢查巴士路線與到站資料） ---------- */
 const diagLines = [];
 const tests = [
+  ['分段車費配對（hkbus 每站車費）', async () => {
+    const nt = await loadDb(); await loadFares(); await loadSection();
+    const c = { kmb: [0, 0], ctb: [0, 0] }, miss = []; let same = 0, diff = 0, ex = '';
+    for (const r of nt.routes) {
+      const k = isKmb(r) ? 'kmb' : 'ctb'; c[k][1]++;
+      const f0 = secFare(r, 0);
+      if (f0 == null) { if (miss.length < 8) miss.push((isKmb(r) ? '九' : '城') + r.route); continue; }
+      c[k][0]++;
+      const td = fareMap ? (fareMap.get((isKmb(r) ? 'KMB' : 'CTB') + '|' + r.route + '|' + (r.bound[r.co[0]] === 'I' ? 2 : 1)) ?? fareMap.get((isKmb(r) ? 'KMB' : 'CTB') + '|' + r.route)) : null;
+      if (td != null) { if (Math.abs(td - f0) < 0.05) same++; else { diff++; if (diff <= 3) ex += ` ${isKmb(r) ? '九' : '城'}${r.route}（每站 ${f0}／運輸署 ${td}）`; } }
+    }
+    return `九巴／龍運 ${c.kmb[0]}／${c.kmb[1]} 條、城巴 ${c.ctb[0]}／${c.ctb[1]} 條配到每站車費；首站車費與運輸署全程車費一致 ${same} 條、不一致 ${diff} 條${ex ? '，例：' + ex : ''}；配不到例：${miss.join('、') || '無'}`;
+  }],
   ['車費配對（九巴／龍運、城巴）', async () => {
     const nt = await loadDb(); await loadFares();
     const c = { kmb: [0, 0], ctb: [0, 0] }, miss = [];
@@ -1674,7 +1725,7 @@ loadDb().catch(() => { /* 搜索時會再顯示錯誤 */ });
   const save = () => { try { const o = {}; ids.forEach(id => { o[id] = $('#' + id).value; }); localStorage.setItem(KEY, JSON.stringify(o)); } catch (e) { /* 存不了也沒關係 */ } };
   ids.forEach(id => { const el = $('#' + id); if (saved[id] != null && [...el.options].some(o => o.value === saved[id])) el.value = saved[id]; el.addEventListener('change', save); });
 }
-setTimeout(() => { loadFares().then(() => { try { applyJourneyTimes(); } catch (e) {} try { if (current && current.length && searchState) renderResults(); } catch (e) {} }).catch(() => {}); }, 3000);
+setTimeout(() => { const redraw = () => { try { if (current && current.length && searchState) renderResults(); } catch (e) { /* 忽略 */ } }; loadFares().then(() => { try { applyJourneyTimes(); } catch (e) { /* 忽略 */ } redraw(); }).catch(() => {}).then(() => loadSection()).then(redraw).catch(() => {}); }, 3000);
 </script>
 </body>
 </html>
