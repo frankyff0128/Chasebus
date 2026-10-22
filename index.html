@@ -104,62 +104,89 @@ details .field{margin-top:8px}
 textarea{width:100%;min-height:140px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font:12px/1.4 ui-monospace,monospace}
 .leaflet-container{font:inherit}
 @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+
+/* ===== v11 介面 ===== */
+html,body{height:100%;overflow:hidden}body{padding:0!important}
+#mapWrap{position:fixed;inset:0;margin:0;z-index:0}
+#map{height:100%;min-height:0;border:0;border-radius:0}
+.fab{position:fixed;z-index:1200;width:46px;height:46px;border-radius:23px;border:0;background:var(--card);color:var(--fg);box-shadow:0 2px 10px rgba(0,0,0,.4);font-size:22px;display:flex;align-items:center;justify-content:center;padding:0}
+#btnSet{left:12px;top:max(12px,env(safe-area-inset-top))}
+#locate{right:12px;bottom:max(24px,env(safe-area-inset-bottom))}
+.brand{position:fixed;z-index:1200;right:12px;top:max(12px,env(safe-area-inset-top));font-size:24px;font-weight:800;letter-spacing:.04em;background:var(--card);color:var(--fg);padding:5px 14px;border-radius:23px;box-shadow:0 2px 10px rgba(0,0,0,.4);display:flex;align-items:flex-end;gap:3px;line-height:1.2}
+.brand .ver{font-size:10px;font-weight:400;color:var(--muted);letter-spacing:0;margin-bottom:3px}
+#homeBox{position:fixed;z-index:1200;left:12px;right:12px;top:calc(50% + 26px);max-width:560px;margin:0 auto;background:var(--card);border:1px solid var(--line);border-radius:26px;padding:8px 10px;box-shadow:0 4px 18px rgba(0,0,0,.4);max-height:calc(50% - 44px);overflow:auto}
+#homeBox:not(.open) .more{display:none}
+.hrow{display:flex;align-items:center;gap:6px;margin:4px 0}
+.hrow .inp{flex:1 1 0}
+.hrow input[type=text]{border-radius:20px;width:100%}
+.ib{flex:0 0 auto;width:40px;height:40px;border-radius:20px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font-size:18px;padding:0}
+.mapbtn{flex:0 0 auto;font-size:12px;padding:6px 9px;border-radius:14px}
+.prog{height:6px;border-radius:3px;background:var(--soft);overflow:hidden;margin:8px 4px 4px}.prog i{display:block;height:100%;width:0;background:var(--accent);transition:width .35s}
+body.picking #homeBox,body.picking .brand,body.picking #btnSet,body.picking #locate,body.inSheet .brand,body.inSheet #btnSet,body.inSheet #locate{display:none}
+#sheet{position:fixed;left:0;right:0;bottom:0;top:0;z-index:2500;background:var(--bg);display:flex;flex-direction:column;transition:top .25s}
+#sheet.half{top:50%;border-radius:16px 16px 0 0;box-shadow:0 -4px 18px rgba(0,0,0,.45)}
+#sheetHead{touch-action:none;padding:max(8px,env(safe-area-inset-top)) 14px 8px;border-bottom:1px solid var(--line)}
+#sheet.half #sheetHead{padding-top:8px}
+.grab{width:44px;height:5px;border-radius:3px;background:var(--line);margin:0 auto 8px}
+.sumrow{display:flex;align-items:center;gap:8px}
+#sum{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:700;font-size:16px}
+#results{flex:1;overflow:auto;padding:6px 14px max(24px,env(safe-area-inset-bottom));-webkit-overflow-scrolling:touch}
+#settings{position:fixed;inset:0;z-index:3500;background:var(--bg);overflow:auto;padding:max(14px,env(safe-area-inset-top)) 14px 40px}
+#toast{position:fixed;left:12px;right:12px;bottom:90px;z-index:4500;margin:0 auto;max-width:520px;background:#222;color:#fff;padding:10px 14px;border-radius:12px;font-size:14px}
+#etaBox{position:fixed;z-index:4000;left:12px;right:12px;top:28%;margin:0 auto;max-width:420px;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:14px;padding:12px;box-shadow:0 6px 24px rgba(0,0,0,.5)}
+.res .rt[data-k]{cursor:pointer;text-decoration:underline}
 </style>
 </head>
-<body>
-<div class="wrap">
-<header><h1>飛巴</h1><span class="ver">v10.3</span></header>
-<div id="envWarn" class="banner" hidden></div>
-<div class="tabs" role="tablist">
-  <button id="tabSearch" role="tab" aria-selected="true">查路線</button>
-  <button id="tabDiag" role="tab" aria-selected="false">資料測試</button>
+<body data-view="home">
+<div id="mapWrap">
+  <div id="map" aria-label="地圖"></div>
+  <div class="pickbar top" id="pickTop" hidden><span id="pickMsg"></span><button type="button" id="pickCancel">取消</button></div>
+  <div class="pickbar bottom" id="pickBottom" hidden><span id="pickLabel">請點一下地圖</span><button type="button" class="ok" id="pickOk" disabled>確定</button></div>
+</div>
+<div id="envWarn" class="banner" hidden style="position:fixed;z-index:1300;left:12px;right:12px;top:70px"></div>
+<button type="button" class="fab" id="btnSet" aria-label="設定">⚙</button>
+<div class="brand">飛巴<span class="ver">v11</span></div>
+<button type="button" class="fab" id="locate" aria-label="回到目前位置">◎</button>
+
+<div id="homeBox">
+  <div class="more">
+    <div class="hrow"><div class="inp"><input id="qO" type="text" value="目前位置" autocomplete="off" enterkeyhint="search" aria-label="起點"><button type="button" class="x" id="xO" aria-label="清除起點內容">×</button></div><button type="button" class="ib" id="gpsO" title="起點用目前位置" aria-label="起點用目前位置">◎</button><button type="button" class="b mapbtn" id="mapO">地圖選點</button></div>
+    <ul class="sugg" id="suO" hidden></ul>
+  </div>
+  <div class="hrow"><div class="inp"><input id="qD" type="text" placeholder="今日想去邊？" autocomplete="off" enterkeyhint="search" aria-label="終點"><button type="button" class="x" id="xD" aria-label="清除終點內容" hidden>×</button></div><button type="button" class="b mapbtn" id="mapD">地圖選點</button></div>
+  <ul class="sugg" id="suD" hidden></ul>
+  <div class="more">
+    <div class="hrow"><button type="button" class="ib" id="swap" title="起終點互換" aria-label="起終點互換">⇅</button><button type="button" class="primary" id="go" disabled style="flex:1">搜索巴士</button></div>
+    <div class="prog" id="prog" hidden><i></i></div>
+  </div>
 </div>
 
-<section id="paneSearch">
-  <div class="card">
-    <div class="field">
-      <label for="qO">起點</label>
-      <div class="row"><div class="inp"><input id="qO" type="text" value="目前位置" autocomplete="off" enterkeyhint="search"><button type="button" class="x" id="xO" aria-label="清除起點內容">×</button></div><button class="b" id="mapO">在地圖點選</button></div>
-      <ul class="sugg" id="suO" hidden></ul>
-    </div>
-    <div class="field">
-      <label for="qD">終點</label>
-      <div class="row"><div class="inp"><input id="qD" type="text" placeholder="想去邊？" autocomplete="off" enterkeyhint="search"><button type="button" class="x" id="xD" aria-label="清除終點內容" hidden>×</button></div><button class="b" id="mapD">在地圖點選</button></div>
-      <ul class="sugg" id="suD" hidden></ul>
-    </div>
-    <div class="row" style="margin-bottom:8px"><button class="b" id="gpsO">起點用目前位置</button><button class="b" id="swap">起終點互換</button></div>
-    <details>
-      <summary>更多設定</summary>
-      <div class="field"><label for="maxTr">最多轉車次數</label>
-        <select id="maxTr"><option value="0">不轉車（只看直達）</option><option value="1">1 次</option><option value="2">2 次</option><option value="3" selected>3 次</option><option value="4">4 次</option><option value="5">5 次</option></select></div>
-      <div class="field"><label for="trWalk">轉車時最多步行</label>
-        <select id="trWalk"><option value="3">3 分鐘</option><option value="5" selected>5 分鐘</option><option value="8">8 分鐘</option><option value="10">10 分鐘</option></select></div>
-      <div class="field"><label for="rad">起點、終點旁邊找巴士站的範圍</label>
-        <select id="rad"><option value="500">500 米</option><option value="800">800 米</option><option value="1000" selected>1 公里</option><option value="1500">1.5 公里</option></select></div>
-    </details>
-    <button class="primary" id="go" disabled>搜索巴士</button>
-    <p class="hint" id="status" role="status">先設定終點。</p>
-    <p class="hint" id="dbStat"></p>
-  </div>
-  <div id="mapWrap">
-    <div id="map" aria-label="地圖"></div>
-    <button type="button" class="fsbtn" id="fsBtn" title="地圖放大至全螢幕" aria-label="地圖放大至全螢幕">⛶</button>
-    <div class="pickbar top" id="pickTop" hidden><span id="pickMsg"></span><button type="button" id="pickCancel">取消</button></div>
-    <div class="pickbar bottom" id="pickBottom" hidden><span id="pickLabel">請點一下地圖</span><button type="button" class="ok" id="pickOk" disabled>確定</button></div>
-  </div>
-  <div id="selInfo"></div>
+<section id="sheet" hidden>
+  <div id="sheetHead"><div class="grab"></div><div class="sumrow"><div id="sum"></div><button type="button" class="b" id="redo">重新搜索</button></div></div>
+  <div id="selInfo" hidden></div>
   <div id="results"></div>
 </section>
 
-<section id="paneDiag" hidden>
+<aside id="settings" hidden>
+  <div class="sumrow"><b style="flex:1;font-size:18px">設定</b><button type="button" class="b" id="setClose">關閉</button></div>
+  <div class="card" style="margin-top:12px">
+    <div class="field"><label for="trWalk">轉車時最多步行</label>
+      <select id="trWalk"><option value="3">3 分鐘</option><option value="5" selected>5 分鐘</option><option value="8">8 分鐘</option><option value="10">10 分鐘</option></select></div>
+    <div class="field"><label for="rad">起點、終點旁邊找巴士站的範圍</label>
+      <select id="rad"><option value="300">300 米</option><option value="500">500 米</option><option value="1000" selected>1 公里</option></select></div>
+    <p class="hint" id="dbStat"></p>
+  </div>
   <div class="card">
-    <p style="margin-top:0">這一頁檢查程式能不能讀到巴士路線和到站資料。按一下開始測試，完成後按「複製結果」，貼給我就可以。</p>
+    <b>資料測試</b>
+    <p class="hint">檢查程式能不能讀到巴士路線和到站資料。按開始測試，完成後按「複製結果」。</p>
     <div class="row"><button class="b primary" id="runDiag" style="width:auto">開始測試</button><button class="b" id="copyDiag">複製結果</button></div>
     <ul class="diag" id="diagList"></ul>
     <textarea id="diagText" hidden readonly aria-label="測試結果文字"></textarea>
   </div>
-</section>
-</div>
+</aside>
+
+<div id="etaBox" hidden><div class="sumrow"><b id="etaTitle" style="flex:1"></b><button type="button" class="b" id="etaRef" aria-label="刷新">↻</button><button type="button" class="b" id="etaClose" aria-label="關閉">✕</button></div><div id="etaBody"></div></div>
+<div id="toast" hidden></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
@@ -185,7 +212,7 @@ function walkTr(m) { return m < SAME_STOP_M ? 0 : walkMin(m); }
 const SAME_STOP_M = 100; // 相距不足 100 米的站視為同一個站
 /* ---------- 真實步行距離：地政總署 Map API 行人路線。查到就用，查不到就退回直線估算 ---------- */
 const PED = 'https://mapapi.hkmapservice.gov.hk/PedRoute/NAServer/route/';
-const pedCache = new Map(); let pedMode = null, pedFails = 0, pedOk = 0;
+const pedCache = new Map(), pedPath = new Map(); let pedMode = null, pedFails = 0, pedOk = 0;
 const pedKey = (a, b) => a.lat.toFixed(5) + ',' + a.lng.toFixed(5) + '|' + b.lat.toFixed(5) + ',' + b.lng.toFixed(5);
 function realMin(a, b, fbM, transfer) {
   const m = pedCache.get(pedKey(a, b));
@@ -205,9 +232,9 @@ async function pedRoute(a, b) {
     const stops = { features: [a, b].map((q, i) => ({ attributes: { Name: 'P' + i }, geometry: { spatialReference: { latestWkid: 4326 }, x: q.lng, y: q.lat } })) };
     const r = await getJSON(PED + 'solve?stops=' + encodeURIComponent(JSON.stringify(stops)) + '&travelMode=' + encodeURIComponent(pedMode) + '&directionsLanguage=zh-HK&outSR=4326&f=json&returnZ=true&returnDirections=false&returnRoutes=true', 15000, 1);
     const f = r.routes && r.routes.features && r.routes.features[0];
-    let len = 0;
-    if (f) for (const path of (f.geometry.paths || [])) for (let i = 1; i < path.length; i++) len += hav(path[i - 1][1], path[i - 1][0], path[i][1], path[i][0]);
-    if (len > 0) { pedCache.set(key, len); pedOk++; } else pedFails++;
+    let len = 0; const line = [];
+    if (f) for (const path of (f.geometry.paths || [])) for (let i = 0; i < path.length; i++) { line.push([path[i][1], path[i][0]]); if (i) len += hav(path[i - 1][1], path[i - 1][0], path[i][1], path[i][0]); }
+    if (len > 0) { pedCache.set(key, len); pedPath.set(key, line); pedOk++; } else pedFails++;
   } catch (e) { pedFails++; }
 }
 async function prefetchWalk(pairs, label) {
@@ -934,18 +961,12 @@ function loadDb() {
 
 /* ---------- 地圖（只顯示香港） ---------- */
 const HK_BOUNDS = L.latLngBounds([22.13, 113.80], [22.58, 114.45]);
-const map = L.map('map', { zoomControl: true, minZoom: 10, maxZoom: 20, maxBounds: HK_BOUNDS.pad(0.1), maxBoundsViscosity: 1, attributionControl: false }).fitBounds(HK_BOUNDS);
+const map = L.map('map', { zoomControl: false, minZoom: 10, maxZoom: 20, maxBounds: HK_BOUNDS.pad(0.1), maxBoundsViscosity: 1, attributionControl: false }).fitBounds(HK_BOUNDS);
 /* 地圖：地政總署 Map API（底圖 + 中文地名標籤，不用航攝圖）。網址集中放在這裡，日後要改只改這兩行 */
 const TILE_BASE = 'https://mapapi.geodata.gov.hk/gs/api/v1.0.0/xyz/basemap/wgs84/{z}/{x}/{y}.png';
 const TILE_LABEL = 'https://mapapi.geodata.gov.hk/gs/api/v1.0.0/xyz/label/hk/tc/wgs84/{z}/{x}/{y}.png';
 const baseLayer = L.tileLayer(TILE_BASE, { minZoom: 10, maxZoom: 20, bounds: HK_BOUNDS.pad(0.1), zIndex: 1 }).addTo(map);
 L.tileLayer(TILE_LABEL, { minZoom: 10, maxZoom: 20, bounds: HK_BOUNDS.pad(0.1), zIndex: 2 }).addTo(map);
-{ // 右下角：地圖放大至全螢幕／還原
-  const w = $('#mapWrap'), b = $('#fsBtn');
-  const sync = () => { b.textContent = w.classList.contains('full') ? '✕' : '⛶'; setTimeout(() => map.invalidateSize(), 50); };
-  b.onclick = () => { if (pickMode) return; w.classList.toggle('full'); document.body.style.overflow = w.classList.contains('full') ? 'hidden' : ''; sync(); };
-  new MutationObserver(sync).observe(w, { attributes: true, attributeFilter: ['class'] });
-}
 { // 如果底圖一張都載入不了，在頁面頂部提示（不影響搜索巴士）
   let ok = 0, bad = 0;
   baseLayer.on('tileload', () => { ok++; });
@@ -963,7 +984,26 @@ const routeLayer = L.layerGroup().addTo(map);
 const pts = { o: null, d: null }; // {lat,lng,label,marker,gps}
 const inHK = (lat, lng) => HK_BOUNDS.pad(0.05).contains([lat, lng]);
 
-function setStatus(t) { $('#status').textContent = t; }
+/* 進度條、提示與運算記錄：平時只顯示進度條，運算資訊收在最下面的「除錯檢查」 */
+const statusLog = []; let progV = 0, progT = null, toastT = null;
+function progSet(v) { progV = v; $('#prog i').style.width = v + '%'; }
+function progStart() { $('#prog').hidden = false; progSet(3); clearInterval(progT); progT = setInterval(() => progSet(progV + (92 - progV) * 0.015), 400); }
+function progEnd() { clearInterval(progT); progT = null; progSet(100); setTimeout(() => { $('#prog').hidden = true; progSet(0); }, 500); }
+function toast(t) { const e = $('#toast'); e.textContent = t; e.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { e.hidden = true; }, 5000); }
+function setStatus(t) {
+  if (statusLog[statusLog.length - 1] !== t) { statusLog.push(new Date().toLocaleTimeString('zh-HK') + ' ' + t); if (statusLog.length > 40) statusLog.shift(); }
+  if (progT && !/準備全港/.test(t)) progSet(progV + (92 - progV) * 0.04);
+  if (!/^完成/.test(t) && /失敗|找不到|用不了|未能|不在香港|沒有允許/.test(t)) toast(t);
+}
+const openBox = () => $('#homeBox').classList.add('open');
+function setView(v) {
+  document.body.dataset.view = v;
+  const sh = $('#sheet'); sh.hidden = v === 'home'; sh.classList.toggle('half', v === 'detail');
+  document.body.classList.toggle('inSheet', v !== 'home');
+  if (v !== 'home') $('#sum').textContent = (pts.o ? pts.o.label : '目前位置') + ' → ' + (pts.d ? pts.d.label : '');
+  else openBox();
+  setTimeout(() => map.invalidateSize(), 80);
+}
 function refreshGo() {
   const oKnown = !!pts.o || $('#qO').value.trim() === '目前位置';
   $('#go').disabled = !(oKnown && pts.d);
@@ -982,6 +1022,7 @@ function setPoint(which, lat, lng, label, gps) {
   if (b.length === 1) map.setView(b[0], Math.max(map.getZoom(), 15));
   else map.fitBounds(b, { padding: [40, 40] });
   refreshGo();
+  if (which === 'd' || !gps) openBox();
 }
 function syncX(which) {
   const el = which === 'o' ? $('#qO') : $('#qD');
@@ -1020,8 +1061,7 @@ async function useGpsAsOrigin(silent) {
 let pickMode = null, pickTmp = null, pickMarker = null;
 function startPick(which) {
   pickMode = which; pickTmp = null;
-  $('#mapWrap').classList.add('full');
-  document.body.style.overflow = 'hidden';
+  document.body.classList.add('picking');
   $('#pickTop').hidden = false; $('#pickBottom').hidden = false;
   $('#pickMsg').textContent = '請在地圖上點一下，選擇' + (which === 'o' ? '起點' : '終點');
   $('#pickLabel').textContent = '還沒有選位置'; $('#pickOk').disabled = true;
@@ -1034,8 +1074,7 @@ function startPick(which) {
 function endPick() {
   pickMode = null; pickTmp = null;
   if (pickMarker) { map.removeLayer(pickMarker); pickMarker = null; }
-  $('#mapWrap').classList.remove('full');
-  document.body.style.overflow = '';
+  document.body.classList.remove('picking');
   $('#pickTop').hidden = true; $('#pickBottom').hidden = true;
   setTimeout(() => map.invalidateSize(), 60);
 }
@@ -1052,7 +1091,6 @@ $('#pickOk').onclick = () => {
   const w = pickMode, p = pickTmp;
   endPick();
   setPoint(w, p.lat, p.lng, '地圖上的位置 (' + p.lat.toFixed(5) + ', ' + p.lng.toFixed(5) + ')');
-  $('#mapWrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
 };
 $('#pickCancel').onclick = endPick;
 
@@ -1143,7 +1181,7 @@ async function fetchEta(key, store) {
 }
 
 async function runSearch() {
-  const go = $('#go'); go.disabled = true;
+  const go = $('#go'); go.disabled = true; openBox(); progStart();
   $('#results').innerHTML = ''; $('#selInfo').innerHTML = '';
   routeLayer.clearLayers(); stopLayer.clearLayers();
   try {
@@ -1155,7 +1193,7 @@ async function runSearch() {
     let nt;
     try { nt = await loadDb(); } finally { clearInterval(iv); }
     applyJourneyTimes();
-    const r = +$('#rad').value, maxRides = +$('#maxTr').value + 1, trM = +$('#trWalk').value * WALK_M_PER_MIN / DETOUR;
+    const r = +$('#rad').value, maxRides = 4, trM = +$('#trWalk').value * WALK_M_PER_MIN / DETOUR;
     const oNear = nearStops(nt.stops, pts.o.lat, pts.o.lng, r);
     const dNear = nearStops(nt.stops, pts.d.lat, pts.d.lng, r);
     for (const [m, cls] of [[oNear, 'o'], [dNear, 'd']]) {
@@ -1264,6 +1302,7 @@ async function runSearch() {
       shownD = Math.min(D.length, 5); shownT = Math.min(T2.length, 10); selectedIdx = -1;
       searchState = { now, net: nt };
       renderResults();
+      if (final) setView('results');
       const dropped = drops.nodata + drops.nobus + drops.nochain;
       const nEst = current.filter(x => x.ev.est).length;
       setStatus((final ? `完成（${hkTime(Date.now())}）。` : '先顯示直達路線，正在搜尋轉乘方案…　') +
@@ -1385,10 +1424,10 @@ async function runSearch() {
     show(true);
   } catch (e) {
     setStatus('搜索失敗：' + e.message + '。請到「資料測試」分頁看看是哪一項不能用。');
-  } finally { refreshGo(); }
+  } finally { refreshGo(); progEnd(); }
 }
 function scrollToResults() {
-  const el = current.length ? $('#results') : $('#status');
+  const el = current.length ? $('#results') : $('#selInfo');
   setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
 }
 
@@ -1396,7 +1435,7 @@ function etaPill(min) {
   return `<span class="eta ${min < 6 ? 'y' : 'g'}">${min < 1 ? '即將' : min + ' 分鐘'}</span>`;
 }
 const minTxt = m => (m < 1 ? '即將到' : m + ' 分鐘');
-const rtBadge = r => `<span class="rt${isKmb(r) ? '' : ' c'}">${esc(r.route)}</span>`;
+const rtBadge = (r, k) => `<span class="rt${isKmb(r) ? '' : ' c'}"${k != null ? ' data-k="' + k + '"' : ''}>${esc(r.route)}</span>`;
 /* ---------- 車費：運輸署路線資料的「全程車費」（只供參考）。只抽出「公司|路線|方向 → 車費」，存在手機 7 日 ---------- */
 const FARE_URL = 'https://static.data.gov.hk/td/routes-fares-geojson/JSON_BUS.json';
 let fareMap = null, jtMap = null, farePromise = null;
@@ -1492,14 +1531,14 @@ function renderResults() {
     const first = ev.legs[0], nt = searchState.net;
     const mins = Math.max(1, Math.round(ev.totalSec / 60));
     const fl = [`步行 ${ev.walkO} 分`];
-    ev.legs.forEach(l => { fl.push(rtBadge(l.r)); if (l.walkAfter > 0) fl.push(`步行 ${l.walkAfter} 分`); });
+    ev.legs.forEach((l, k) => { fl.push(rtBadge(l.r, k)); if (l.walkAfter > 0) fl.push(`步行 ${l.walkAfter} 分`); });
     const flow = fl.join(' → ');
     const detail = ev.legs.map((l, k) => {
       const bs = nt.stops.get(l.r.stops[l.i]), as = nt.stops.get(l.r.stops[l.j]);
       const sched = l.board.rmk && l.board.rmk.indexOf('原定') >= 0 ? '（原定班次）' : '';
       const w = Math.max(0, Math.round(l.wait / 60000));
       return (k > 0 ? `<div class="sub trw">轉乘 ${esc(l.r.route)}：預計等候約 <span class="wt ${w < 5 ? 'y' : 'g'}">${w} 分鐘</span>${sched}</div>` : '') +
-        `<div class="sub">${rtBadge(l.r)}${isKmb(l.r) ? '' : '（城巴）'} 往${esc(l.r.dest)}：「<span class="tstop">${esc(bs.name)}</span>」上車（${minTxt(l.nextMin)}${l.next2Min != null ? '、' + minTxt(l.next2Min) : ''}${sched}），乘 ${l.nStops} 站，「${k < ev.legs.length - 1 ? `<span class="tstop">${esc(as.name)}</span>` : esc(as.name)}」下車${l.est ? '（後段行車時間估算）' : ''}${l.synth ? '（班次按間隔估算）' : ''}</div>`;
+        `<div class="sub">${rtBadge(l.r, k)}${isKmb(l.r) ? '' : '（城巴）'} 往${esc(l.r.dest)}：「<span class="tstop">${esc(bs.name)}</span>」上車（${minTxt(l.nextMin)}${l.next2Min != null ? '、' + minTxt(l.next2Min) : ''}${sched}），乘 ${l.nStops} 站，「${k < ev.legs.length - 1 ? `<span class="tstop">${esc(as.name)}</span>` : esc(as.name)}」下車${l.est ? '（後段行車時間估算）' : ''}${l.synth ? '（班次按間隔估算）' : ''}</div>`;
     }).join('') + ((alts && alts.length) ? `<div class="sub alts"><b>也可乘（同樣上下車站、趕同一班車）：</b>${alts.map(a => '<div>' + a.ev.legs.map(l => { const w = Math.max(0, Math.round(l.wait / 60000)); return rtBadge(l.r) + ' 候車 <span class="wt ' + (w < 5 ? 'y' : 'g') + '">' + w + ' 分</span>' + (l.board.rmk && l.board.rmk.indexOf('原定') >= 0 ? '（原定班次）' : ''); }).join(' → ') + '，約 ' + Math.max(1, Math.round(a.ev.totalSec / 60)) + ' 分鐘</div>').join('')}</div>` : '');
     return `<div class="res" role="button" tabindex="0" data-idx="${idx}" aria-selected="${idx === selectedIdx}">
       <div class="top"><div class="tot">約 <b>${mins}</b> 分鐘${ev.transfers ? (tag ? '' : `<span class="tag">轉${ev.transfers}次車</span>`) : '<span class="tag">直達</span>'}${tag ? `<span class="tag good${ev.transfers ? ' sm' : ''}">${esc(tag)}</span>` : ''}${ev.est ? '<span class="tag warn">含估算</span>' : ''}</div>
@@ -1510,43 +1549,64 @@ function renderResults() {
   const tHtml = current.slice(nDirect, nDirect + shownT).map((x, k) => card(x, nDirect + k)).join('');
   const rest = (nDirect - shownD) + ((current.length - nDirect) - shownT);
   box.innerHTML =
+    (!current.length ? '<div class="grp">沒有找到合適的方案，可以放寬搜索範圍再試。</div>' : '') +
     (nDirect ? `<div class="grp">直達路線（置頂）</div>` + dHtml : '') +
     (current.length > nDirect ? `<div class="grp">轉乘方案（都比最快直達快，轉乘空隙至少 3 分鐘）</div>` + tHtml : '') +
     (rest > 0 ? `<button class="b" id="more" style="width:100%">顯示更多（還有 ${rest} 個）</button>` : '') +
-    `<details class="dbg"><summary>直達檢查（除錯用）：起終點附近靜態找到 ${directReport.length} 個直達方案</summary><div>${esc(chaseInfo)}</div>${dbgPlans.map(x => '<div>' + esc(x) + '</div>').join('')}${directReport.length ? directReport.map(x => '<div>' + esc(x) + '</div>').join('') : '<div>找不到任何直達路線：起點和終點附近沒有同一條路線經過。</div>'}</details>`;
+    `<details class="dbg"><summary>除錯檢查</summary><div>起終點附近靜態找到 ${directReport.length} 個直達方案</div>${statusLog.slice(-14).map(x => '<div>' + esc(x) + '</div>').join('')}<div>${esc(chaseInfo)}</div>${dbgPlans.map(x => '<div>' + esc(x) + '</div>').join('')}${directReport.length ? directReport.map(x => '<div>' + esc(x) + '</div>').join('') : '<div>找不到任何直達路線：起點和終點附近沒有同一條路線經過。</div>'}</details>`;
   const more = $('#more');
   if (more) more.onclick = () => { shownD = Math.min(nDirect, shownD + 5); shownT = Math.min(current.length - nDirect, shownT + 10); renderResults(); };
 }
-function selectResult(idx) {
+async function selectResult(idx) {
   const item = current[idx]; if (!item) return;
   const { ev } = item, nt = searchState.net;
   selectedIdx = idx;
   document.querySelectorAll('.res').forEach(e => e.setAttribute('aria-selected', String(+e.dataset.idx === idx)));
+  setView('detail');
+  const sel = document.querySelector('.res[aria-selected="true"]'); if (sel) sel.scrollIntoView({ block: 'nearest' });
   routeLayer.clearLayers();
+  const stopsOf = l => [nt.stops.get(l.r.stops[l.i]), nt.stops.get(l.r.stops[l.j])];
+  const pairs = []; let prev = pts.o;
+  ev.legs.forEach(l => { const [bs, as] = stopsOf(l); pairs.push([prev, bs]); prev = as; });
+  pairs.push([prev, pts.d]);
+  await prefetchWalk(pairs, '查詢步行路線');
+  if (selectedIdx !== idx) return;
   const allPts = [[pts.o.lat, pts.o.lng], [pts.d.lat, pts.d.lng]];
-  const g = (a, b) => `https://www.google.com/maps/dir/?api=1&origin=${a.lat},${a.lng}&destination=${b.lat},${b.lng}&travelmode=walking`;
-  const links = [];
-  let prevPoint = pts.o, prevLabel = '起點';
+  const walk = (a, b, col) => {
+    const path = pedPath.get(pedKey(a, b));
+    L.polyline(path || [[a.lat, a.lng], [b.lat, b.lng]], { color: col, weight: 4, opacity: .9, dashArray: path ? null : '6 6' }).addTo(routeLayer);
+    if (path) allPts.push(...path);
+  };
+  prev = pts.o;
   ev.legs.forEach((l, k) => {
-    const col = LEG_COLORS[k % LEG_COLORS.length];
-    const seg = l.r.stops.slice(l.i, l.j + 1).map(id => { const s = nt.stops.get(id); return [s.lat, s.lng]; });
-    L.polyline(seg, { color: col, weight: 5, opacity: .85 }).addTo(routeLayer);
-    allPts.push(...seg);
-    const bs = nt.stops.get(l.r.stops[l.i]), as = nt.stops.get(l.r.stops[l.j]);
-    L.marker([bs.lat, bs.lng], { icon: pinIcon('u', '上') }).bindTooltip(esc(l.r.route + '：' + bs.name)).addTo(routeLayer);
-    L.marker([as.lat, as.lng], { icon: pinIcon('x', '下') }).bindTooltip(esc(l.r.route + '：' + as.name)).addTo(routeLayer);
-    L.polyline([[prevPoint.lat, prevPoint.lng], [bs.lat, bs.lng]], { color: '#1b7a3a', weight: 3, dashArray: '6 6' }).addTo(routeLayer);
-    if (k === 0 || (l.walkAfter !== undefined && ev.legs[k - 1].walkAfter > 0))
-      links.push(`<a href="${g(prevPoint, bs)}" target="_blank" rel="noopener">步行導航：${k === 0 ? '走到上車站' : '轉乘走到 ' + esc(l.r.route) + ' 上車站'}（${esc(bs.name)}）</a>`);
-    prevPoint = as; prevLabel = as.name;
+    const col = LEG_COLORS[k % LEG_COLORS.length], [bs, as] = stopsOf(l);
+    const seg = l.r.stops.slice(l.i, l.j + 1).map(id => { const x = nt.stops.get(id); return [x.lat, x.lng]; });
+    L.polyline(seg, { color: col, weight: 5, opacity: .85 }).addTo(routeLayer); allPts.push(...seg);
+    walk(prev, bs, '#1b7a3a');
+    L.marker([bs.lat, bs.lng], { icon: pinIcon(k === 0 ? 'u' : 'x', k === 0 ? '上' : '轉') }).addTo(routeLayer);
+    prev = as;
   });
-  L.polyline([[prevPoint.lat, prevPoint.lng], [pts.d.lat, pts.d.lng]], { color: '#b3261e', weight: 3, dashArray: '6 6' }).addTo(routeLayer);
-  links.push(`<a href="${g(prevPoint, pts.d)}" target="_blank" rel="noopener">步行導航：下車後走到終點</a>`);
-  map.fitBounds(L.latLngBounds(allPts), { padding: [30, 30] });
-  $('#selInfo').innerHTML = `<div class="card"><b>步行導航</b>
-    <div class="hint">地圖上的虛線是步行（直線示意，不是實際路徑），實線是巴士路線。實際步行路線請用下面的按鈕交給 Google 地圖。</div>
-    <div class="links">${links.join('')}</div></div>`;
-  $('#mapWrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  walk(prev, pts.d, '#b3261e');
+  map.fitBounds(L.latLngBounds(allPts), { paddingTopLeft: [30, 70], paddingBottomRight: [30, Math.round(innerHeight * 0.5) + 20] });
+}
+
+/* ---------- 點巴士號碼牌：查看該路線在上車站的實時到站 ---------- */
+let etaCtx = null;
+async function loadEta() {
+  if (!etaCtx) return;
+  const { r, i, nt } = etaCtx;
+  $('#etaTitle').innerHTML = rtBadge(r) + ' ' + esc(nt.stops.get(r.stops[i]).name);
+  $('#etaBody').textContent = '查詢中…';
+  const st = new Map(); await fetchEta(boardKey({ r, i }), st);
+  const list = etaAt(r, i, st), now = Date.now();
+  $('#etaBody').innerHTML = (list && list.length)
+    ? list.slice(0, 4).map(x => { const m = Math.max(0, Math.round((x.t - now) / 60000)); return `<div style="font-size:18px;margin:4px 0"><b>${m === 0 ? '即將到達' : m + ' 分鐘'}</b>${x.rmk && x.rmk.indexOf('原定') >= 0 ? '<span class="hint">（原定班次）</span>' : ''}</div>`; }).join('') + `<div class="hint">更新時間 ${new Date().toLocaleTimeString('zh-HK')}</div>`
+    : '現在查不到這條路線的到站預報。';
+}
+function showEta(idx, k) {
+  const it = current[idx]; if (!it) return;
+  etaCtx = { r: it.plan.legs[k].r, i: it.plan.legs[k].i, nt: searchState.net };
+  $('#etaBox').hidden = false; loadEta();
 }
 
 /* ---------- 資料測試（只檢查巴士路線與到站資料） ---------- */
@@ -1672,15 +1732,28 @@ async function copyDiag() {
 }
 
 /* ---------- 事件 ---------- */
-function showTab(which) {
-  const s = which === 's';
-  $('#paneSearch').hidden = !s; $('#paneDiag').hidden = s;
-  $('#tabSearch').setAttribute('aria-selected', String(s));
-  $('#tabDiag').setAttribute('aria-selected', String(!s));
-  if (s) setTimeout(() => map.invalidateSize(), 50);
+$('#btnSet').onclick = () => { $('#settings').hidden = false; };
+$('#setClose').onclick = () => { $('#settings').hidden = true; };
+$('#locate').onclick = async () => {
+  try { const p = await getPos(); map.setView([p.coords.latitude, p.coords.longitude], 16); }
+  catch (e) { toast('未能取得目前位置（' + e.message + '）'); }
+};
+$('#qD').addEventListener('focus', openBox);
+$('#redo').onclick = runSearch;
+$('#etaRef').onclick = loadEta;
+$('#etaClose').onclick = () => { $('#etaBox').hidden = true; };
+{ // 拖動結果面板的頂部：向上拉＝全屏結果，向下拉＝一半地圖；點一下摘要＝回到搜索
+  let y0 = null;
+  $('#sheetHead').addEventListener('pointerdown', e => { if (!e.target.closest('button')) y0 = e.clientY; });
+  window.addEventListener('pointerup', e => {
+    if (y0 === null) return;
+    const dy = e.clientY - y0; y0 = null;
+    const v = document.body.dataset.view;
+    if (dy < -40 && v === 'detail') setView('results');
+    else if (dy > 40 && v === 'results' && selectedIdx >= 0) setView('detail');
+    else if (Math.abs(dy) < 8 && e.target.closest('#sum')) setView('home');
+  });
 }
-$('#tabSearch').onclick = () => showTab('s');
-$('#tabDiag').onclick = () => showTab('d');
 function clearField(which) {
   const el = which === 'o' ? $('#qO') : $('#qD');
   clearTimeout(timers[which]); searchSeq[which]++;
@@ -1688,7 +1761,7 @@ function clearField(which) {
   el.value = '';
   (which === 'o' ? $('#suO') : $('#suD')).hidden = true;
   syncX(which); refreshGo();
-  setStatus(which === 'o' ? '請輸入起點，或按「起點用目前位置」。' : '請輸入終點。');
+  setStatus(which === 'o' ? '請輸入起點，或按起點旁的定位圖示。' : '請輸入終點。');
   el.focus();
 }
 $('#xO').onclick = () => clearField('o');
@@ -1710,7 +1783,11 @@ $('#swap').onclick = () => {
   refreshGo();
 };
 $('#go').onclick = runSearch;
-$('#results').addEventListener('click', e => { const el = e.target.closest('.res'); if (el) selectResult(+el.dataset.idx); });
+$('#results').addEventListener('click', e => {
+  const rt = e.target.closest('.rt[data-k]');
+  if (rt) { const c = rt.closest('.res'); if (c) showEta(+c.dataset.idx, +rt.dataset.k); return; }
+  const el = e.target.closest('.res'); if (el) selectResult(+el.dataset.idx);
+});
 $('#results').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { const el = e.target.closest('.res'); if (el) { e.preventDefault(); selectResult(+el.dataset.idx); } } });
 $('#runDiag').onclick = runDiag;
 $('#copyDiag').onclick = copyDiag;
@@ -1720,7 +1797,7 @@ syncX('o');
 useGpsAsOrigin(true).then(ok => { if (!ok && !pts.o) refreshGo(); });
 loadDb().catch(() => { /* 搜索時會再顯示錯誤 */ });
 { // 記住設定：轉車上限、轉車步行、範圍、只顯示全程實時（存在這部手機的瀏覽器，重新整理不會重置）
-  const KEY = 'lyb_settings', ids = ['maxTr', 'trWalk', 'rad'];
+  const KEY = 'lyb_settings', ids = ['trWalk', 'rad'];
   let saved = {}; try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) { /* 讀不到就用預設 */ }
   const save = () => { try { const o = {}; ids.forEach(id => { o[id] = $('#' + id).value; }); localStorage.setItem(KEY, JSON.stringify(o)); } catch (e) { /* 存不了也沒關係 */ } };
   ids.forEach(id => { const el = $('#' + id); if (saved[id] != null && [...el.options].some(o => o.value === saved[id])) el.value = saved[id]; el.addEventListener('change', save); });
