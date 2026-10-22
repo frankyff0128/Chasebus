@@ -135,6 +135,16 @@ body.picking #homeBox,body.picking .brand,body.picking #btnSet,body.picking #loc
 #toast{position:fixed;left:12px;right:12px;bottom:90px;z-index:4500;margin:0 auto;max-width:520px;background:#222;color:#fff;padding:10px 14px;border-radius:12px;font-size:14px}
 #etaBox{position:fixed;z-index:4000;left:12px;right:12px;top:28%;margin:0 auto;max-width:420px;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:14px;padding:12px;box-shadow:0 6px 24px rgba(0,0,0,.5)}
 .res .rt[data-k]{cursor:pointer;text-decoration:underline}
+#sheetHead .sumrow{justify-content:center}
+#sum{flex:0 1 auto;max-width:88%;border:1px solid var(--line);border-radius:22px;padding:8px 18px;background:var(--card);font-size:15px}
+#fsBtn{z-index:2600}
+body[data-view="detail"] #fsBtn{top:calc(50% - 62px);right:12px}
+body[data-view="map"] #fsBtn{right:12px;bottom:max(24px,env(safe-area-inset-bottom))}
+#navBtn{position:fixed;z-index:2600;left:50%;transform:translateX(-50%);bottom:max(28px,env(safe-area-inset-bottom));padding:12px 22px;border-radius:26px;background:var(--accent);color:var(--accent-fg);border:0;font-weight:700;font-size:16px;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+#navInfo{position:fixed;z-index:2600;left:50%;transform:translateX(-50%);top:max(14px,env(safe-area-inset-top));background:var(--card);color:var(--fg);padding:8px 16px;border-radius:22px;box-shadow:0 2px 10px rgba(0,0,0,.4);font-weight:700;max-width:90%}
+#peek{position:fixed;z-index:1200;left:50%;transform:translateX(-50%);bottom:max(10px,env(safe-area-inset-bottom));width:min(60%,260px);text-align:center;background:var(--card);color:var(--muted);border-radius:22px;padding:6px 10px 8px;box-shadow:0 2px 10px rgba(0,0,0,.4);touch-action:none;font-size:13px}
+#peek .grab{margin-bottom:4px}
+body.picking #peek{display:none}
 </style>
 </head>
 <body data-view="home">
@@ -145,7 +155,7 @@ body.picking #homeBox,body.picking .brand,body.picking #btnSet,body.picking #loc
 </div>
 <div id="envWarn" class="banner" hidden style="position:fixed;z-index:1300;left:12px;right:12px;top:70px"></div>
 <button type="button" class="fab" id="btnSet" aria-label="設定">⚙</button>
-<div class="brand">飛巴<span class="ver">v11</span></div>
+<div class="brand">飛巴<span class="ver">v11.1</span></div>
 <button type="button" class="fab" id="locate" aria-label="回到目前位置">◎</button>
 
 <div id="homeBox">
@@ -162,7 +172,7 @@ body.picking #homeBox,body.picking .brand,body.picking #btnSet,body.picking #loc
 </div>
 
 <section id="sheet" hidden>
-  <div id="sheetHead"><div class="grab"></div><div class="sumrow"><div id="sum"></div><button type="button" class="b" id="redo">重新搜索</button></div></div>
+  <div id="sheetHead"><div class="grab"></div><div class="sumrow"><div id="sum"></div></div></div>
   <div id="selInfo" hidden></div>
   <div id="results"></div>
 </section>
@@ -186,6 +196,10 @@ body.picking #homeBox,body.picking .brand,body.picking #btnSet,body.picking #loc
 </aside>
 
 <div id="etaBox" hidden><div class="sumrow"><b id="etaTitle" style="flex:1"></b><button type="button" class="b" id="etaRef" aria-label="刷新">↻</button><button type="button" class="b" id="etaClose" aria-label="關閉">✕</button></div><div id="etaBody"></div></div>
+<button type="button" class="fab" id="fsBtn" hidden aria-label="地圖全屏">⛶</button>
+<button type="button" id="navBtn" hidden>導航到上車點</button>
+<div id="navInfo" hidden></div>
+<div id="peek" hidden><div class="grab"></div>↑ 返回方案結果</div>
 <div id="toast" hidden></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -997,12 +1011,45 @@ function setStatus(t) {
 }
 const openBox = () => $('#homeBox').classList.add('open');
 function setView(v) {
+  if (v !== 'map') navStop();
   document.body.dataset.view = v;
-  const sh = $('#sheet'); sh.hidden = v === 'home'; sh.classList.toggle('half', v === 'detail');
+  const sh = $('#sheet'); sh.hidden = v === 'home' || v === 'map'; sh.classList.toggle('half', v === 'detail');
   document.body.classList.toggle('inSheet', v !== 'home');
-  if (v !== 'home') $('#sum').textContent = (pts.o ? pts.o.label : '目前位置') + ' → ' + (pts.d ? pts.d.label : '');
-  else openBox();
+  $('#fsBtn').hidden = !(v === 'detail' || v === 'map'); $('#navBtn').hidden = v !== 'map';
+  $('#peek').hidden = !(v === 'home' && current && current.length);
+  if (v === 'results' || v === 'detail') $('#sum').textContent = (pts.o ? pts.o.label : '目前位置') + ' → ' + (pts.d ? pts.d.label : '');
+  else if (v === 'home') openBox();
   setTimeout(() => map.invalidateSize(), 80);
+}
+/* ---------- 導航到上車站：只在按下導航時才持續定位，結束導航或離開就停止（省電） ---------- */
+let navId = null, navLast = 0, navMarker = null, navLine = null, lastBounds = null;
+function navStop() {
+  if (navId !== null && navigator.geolocation) navigator.geolocation.clearWatch(navId);
+  navId = null; navLast = 0;
+  if (navMarker) { map.removeLayer(navMarker); navMarker = null; }
+  if (navLine) { map.removeLayer(navLine); navLine = null; }
+  const ni = $('#navInfo'); if (ni) ni.hidden = true;
+  const nb = $('#navBtn'); if (nb) nb.textContent = '導航到上車點';
+}
+function navStart() {
+  const item = current[selectedIdx]; if (!item) return;
+  const nt = searchState.net, L0 = item.plan.legs[0], bs = nt.stops.get(L0.r.stops[L0.i]);
+  if (!navigator.geolocation) { toast('這個瀏覽器不支援定位'); return; }
+  $('#navBtn').textContent = '結束導航'; $('#navInfo').hidden = false; $('#navInfo').textContent = '定位中…';
+  let first = true;
+  navId = navigator.geolocation.watchPosition(async p => {
+    const me = { lat: p.coords.latitude, lng: p.coords.longitude };
+    if (navMarker) navMarker.setLatLng([me.lat, me.lng]); else navMarker = L.marker([me.lat, me.lng], { icon: pinIcon('o', '我') }).addTo(map);
+    const now = Date.now(); if (now - navLast < 8000) return; navLast = now;
+    const d = hav(me.lat, me.lng, bs.lat, bs.lng);
+    if (d < 25) { $('#navInfo').textContent = '已到達上車站'; return; }
+    await pedRoute(me, bs);
+    if (navId === null) return;
+    const key = pedKey(me, bs), len = pedCache.get(key) ?? d * DETOUR, path = pedPath.get(key) || [[me.lat, me.lng], [bs.lat, bs.lng]];
+    if (navLine) navLine.setLatLngs(path); else navLine = L.polyline(path, { color: '#0d7a69', weight: 6, opacity: .95 }).addTo(map);
+    $('#navInfo').textContent = `距離上車站約 ${Math.round(len)} 米，步行約 ${Math.max(1, Math.ceil(len / WALK_M_PER_MIN))} 分鐘`;
+    if (first) { first = false; map.fitBounds(L.latLngBounds([[me.lat, me.lng], [bs.lat, bs.lng]]), { padding: [60, 90] }); }
+  }, e => { toast('未能取得位置（' + (e.code === 1 ? '你沒有允許定位' : '定位失敗') + '）'); navStop(); }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
 }
 function refreshGo() {
   const oKnown = !!pts.o || $('#qO').value.trim() === '目前位置';
@@ -1435,7 +1482,7 @@ function etaPill(min) {
   return `<span class="eta ${min < 6 ? 'y' : 'g'}">${min < 1 ? '即將' : min + ' 分鐘'}</span>`;
 }
 const minTxt = m => (m < 1 ? '即將到' : m + ' 分鐘');
-const rtBadge = (r, k) => `<span class="rt${isKmb(r) ? '' : ' c'}"${k != null ? ' data-k="' + k + '"' : ''}>${esc(r.route)}</span>`;
+const rtBadge = (r, k, a) => `<span class="rt${isKmb(r) ? '' : ' c'}"${k != null ? ' data-k="' + k + '"' : ''}${a != null ? ' data-a="' + a + '"' : ''}>${esc(r.route)}</span>`;
 /* ---------- 車費：運輸署路線資料的「全程車費」（只供參考）。只抽出「公司|路線|方向 → 車費」，存在手機 7 日 ---------- */
 const FARE_URL = 'https://static.data.gov.hk/td/routes-fares-geojson/JSON_BUS.json';
 let fareMap = null, jtMap = null, farePromise = null;
@@ -1539,7 +1586,7 @@ function renderResults() {
       const w = Math.max(0, Math.round(l.wait / 60000));
       return (k > 0 ? `<div class="sub trw">轉乘 ${esc(l.r.route)}：預計等候約 <span class="wt ${w < 5 ? 'y' : 'g'}">${w} 分鐘</span>${sched}</div>` : '') +
         `<div class="sub">${rtBadge(l.r, k)}${isKmb(l.r) ? '' : '（城巴）'} 往${esc(l.r.dest)}：「<span class="tstop">${esc(bs.name)}</span>」上車（${minTxt(l.nextMin)}${l.next2Min != null ? '、' + minTxt(l.next2Min) : ''}${sched}），乘 ${l.nStops} 站，「${k < ev.legs.length - 1 ? `<span class="tstop">${esc(as.name)}</span>` : esc(as.name)}」下車${l.est ? '（後段行車時間估算）' : ''}${l.synth ? '（班次按間隔估算）' : ''}</div>`;
-    }).join('') + ((alts && alts.length) ? `<div class="sub alts"><b>也可乘（同樣上下車站、趕同一班車）：</b>${alts.map(a => '<div>' + a.ev.legs.map(l => { const w = Math.max(0, Math.round(l.wait / 60000)); return rtBadge(l.r) + ' 候車 <span class="wt ' + (w < 5 ? 'y' : 'g') + '">' + w + ' 分</span>' + (l.board.rmk && l.board.rmk.indexOf('原定') >= 0 ? '（原定班次）' : ''); }).join(' → ') + '，約 ' + Math.max(1, Math.round(a.ev.totalSec / 60)) + ' 分鐘</div>').join('')}</div>` : '');
+    }).join('') + ((alts && alts.length) ? `<div class="sub alts"><b>也可乘（同樣上下車站、趕同一班車）：</b>${alts.map((a, ai) => '<div>' + a.ev.legs.map((l, kk) => { const w = Math.max(0, Math.round(l.wait / 60000)); return rtBadge(l.r, kk, ai) + ' 候車 <span class="wt ' + (w < 5 ? 'y' : 'g') + '">' + w + ' 分</span>' + (l.board.rmk && l.board.rmk.indexOf('原定') >= 0 ? '（原定班次）' : ''); }).join(' → ') + '，約 ' + Math.max(1, Math.round(a.ev.totalSec / 60)) + ' 分鐘</div>').join('')}</div>` : '');
     return `<div class="res" role="button" tabindex="0" data-idx="${idx}" aria-selected="${idx === selectedIdx}">
       <div class="top"><div class="tot">約 <b>${mins}</b> 分鐘${ev.transfers ? (tag ? '' : `<span class="tag">轉${ev.transfers}次車</span>`) : '<span class="tag">直達</span>'}${tag ? `<span class="tag good${ev.transfers ? ' sm' : ''}">${esc(tag)}</span>` : ''}${ev.est ? '<span class="tag warn">含估算</span>' : ''}</div>
       <div class="fare">${fareTxt(ev, plan)}</div><div class="nx">下一班 ${etaPill(first.nextMin)}${first.next2Min != null ? ' <span class="nx2">再下一班 ' + minTxt(first.next2Min) + '</span>' : ''}</div></div>
@@ -1582,12 +1629,14 @@ async function selectResult(idx) {
     const col = LEG_COLORS[k % LEG_COLORS.length], [bs, as] = stopsOf(l);
     const seg = l.r.stops.slice(l.i, l.j + 1).map(id => { const x = nt.stops.get(id); return [x.lat, x.lng]; });
     L.polyline(seg, { color: col, weight: 5, opacity: .85 }).addTo(routeLayer); allPts.push(...seg);
+    seg.forEach(q => L.circleMarker(q, { radius: 4, color: col, weight: 2, fillColor: '#fff', fillOpacity: 1 }).addTo(routeLayer));
     walk(prev, bs, '#1b7a3a');
     L.marker([bs.lat, bs.lng], { icon: pinIcon(k === 0 ? 'u' : 'x', k === 0 ? '上' : '轉') }).addTo(routeLayer);
     prev = as;
   });
   walk(prev, pts.d, '#b3261e');
-  map.fitBounds(L.latLngBounds(allPts), { paddingTopLeft: [30, 70], paddingBottomRight: [30, Math.round(innerHeight * 0.5) + 20] });
+  lastBounds = L.latLngBounds(allPts);
+  map.fitBounds(lastBounds, { paddingTopLeft: [30, 70], paddingBottomRight: [30, Math.round(innerHeight * 0.5) + 20] });
 }
 
 /* ---------- 點巴士號碼牌：查看該路線在上車站的實時到站 ---------- */
@@ -1603,8 +1652,8 @@ async function loadEta() {
     ? list.slice(0, 4).map(x => { const m = Math.max(0, Math.round((x.t - now) / 60000)); return `<div style="font-size:18px;margin:4px 0"><b>${m === 0 ? '即將到達' : m + ' 分鐘'}</b>${x.rmk && x.rmk.indexOf('原定') >= 0 ? '<span class="hint">（原定班次）</span>' : ''}</div>`; }).join('') + `<div class="hint">更新時間 ${new Date().toLocaleTimeString('zh-HK')}</div>`
     : '現在查不到這條路線的到站預報。';
 }
-function showEta(idx, k) {
-  const it = current[idx]; if (!it) return;
+function showEta(idx, k, a) {
+  const it0 = current[idx], it = a != null && a !== '' && it0 && it0.alts ? it0.alts[+a] : it0; if (!it) return;
   etaCtx = { r: it.plan.legs[k].r, i: it.plan.legs[k].i, nt: searchState.net };
   $('#etaBox').hidden = false; loadEta();
 }
@@ -1739,7 +1788,16 @@ $('#locate').onclick = async () => {
   catch (e) { toast('未能取得目前位置（' + e.message + '）'); }
 };
 $('#qD').addEventListener('focus', openBox);
-$('#redo').onclick = runSearch;
+$('#fsBtn').onclick = () => {
+  const toMap = document.body.dataset.view !== 'map';
+  setView(toMap ? 'map' : 'detail');
+  setTimeout(() => { if (lastBounds) map.fitBounds(lastBounds, toMap ? { padding: [40, 90] } : { paddingTopLeft: [30, 70], paddingBottomRight: [30, Math.round(innerHeight * 0.5) + 20] }); }, 150);
+};
+$('#navBtn').onclick = () => { if (navId !== null) navStop(); else navStart(); };
+{ let py = null;
+  $('#peek').addEventListener('pointerdown', e => { py = e.clientY; });
+  window.addEventListener('pointerup', e => { if (py === null) return; const dy = e.clientY - py; py = null; if (e.target.closest && e.target.closest('#peek') && (dy < -30 || Math.abs(dy) < 8)) setView('results'); });
+}
 $('#etaRef').onclick = loadEta;
 $('#etaClose').onclick = () => { $('#etaBox').hidden = true; };
 { // 拖動結果面板的頂部：向上拉＝全屏結果，向下拉＝一半地圖；點一下摘要＝回到搜索
@@ -1785,7 +1843,7 @@ $('#swap').onclick = () => {
 $('#go').onclick = runSearch;
 $('#results').addEventListener('click', e => {
   const rt = e.target.closest('.rt[data-k]');
-  if (rt) { const c = rt.closest('.res'); if (c) showEta(+c.dataset.idx, +rt.dataset.k); return; }
+  if (rt) { const c = rt.closest('.res'); if (c) showEta(+c.dataset.idx, +rt.dataset.k, rt.dataset.a); return; }
   const el = e.target.closest('.res'); if (el) selectResult(+el.dataset.idx);
 });
 $('#results').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { const el = e.target.closest('.res'); if (el) { e.preventDefault(); selectResult(+el.dataset.idx); } } });
