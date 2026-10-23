@@ -159,6 +159,16 @@ body:not([data-view="home"]) #homeBox{display:none}
 #sheetHead{padding-top:max(60px,calc(env(safe-area-inset-top) + 52px))}
 #sheet.half #sheetHead{padding-top:8px}
 body[data-view="map"] #locate{display:flex!important;right:12px;bottom:calc(max(24px,env(safe-area-inset-bottom)) + 62px);z-index:2600}
+body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans-serif;letter-spacing:.01em;-webkit-font-smoothing:antialiased}
+.pin{width:26px;height:26px;border-radius:13px;font-size:11px;font-weight:600;color:#fff;border:2px solid var(--pc,#fff);box-shadow:0 0 0 4px color-mix(in srgb,var(--pc,#fff) 28%,transparent),0 2px 6px rgba(0,0,0,.5)}
+.pin.o,.pin.d,.pin.u,.pin.x,.pin.t{background:#0d1620}
+.pin.o{--pc:#27d3b0}.pin.d{--pc:#8b7bff}.pin.u{--pc:#f5b83d}.pin.x{--pc:#c084fc}.pin.t{--pc:#9aa4ad}
+.res{border-radius:16px;padding:14px 16px;border-color:transparent}
+.res .tot{font-size:14px;color:var(--muted)}
+.res .tot b{font-size:30px;font-weight:700;color:var(--fg);letter-spacing:-.01em}
+.res .fare{top:15px;right:16px;font-size:15px;font-weight:600;color:var(--muted)}
+.res .nx{font-size:13px}
+.tag{font-size:11px;font-weight:600}
 </style>
 </head>
 <body data-view="home">
@@ -169,7 +179,7 @@ body[data-view="map"] #locate{display:flex!important;right:12px;bottom:calc(max(
 </div>
 <div id="envWarn" class="banner" hidden style="position:fixed;z-index:1300;left:12px;right:12px;top:70px"></div>
 <button type="button" class="fab" id="btnSet" aria-label="設定">⚙</button>
-<div class="brand">飛巴<span class="ver">v11.2</span></div>
+<div class="brand">飛巴<span class="ver">v11.3</span></div>
 <button type="button" class="fab" id="locate" aria-label="回到目前位置">◎</button>
 
 <div id="homeBox">
@@ -1048,12 +1058,41 @@ function setView(v) {
 }
 /* ---------- 導航到上車站：只在按下導航時才持續定位，結束導航或離開就停止（省電） ---------- */
 let navId = null, navLast = 0, navMarker = null, navLine = null, lastBounds = null;
-const arrowIcon = L.divIcon({ className: '', html: '<div class="navarrow" style="width:0;height:0;border-left:11px solid transparent;border-right:11px solid transparent;border-bottom:26px solid #f7c600;filter:drop-shadow(0 0 3px #000)"></div>', iconSize: [22, 26], iconAnchor: [11, 13] });
-function setArrow(h) { const el = navMarker && navMarker.getElement(), a = el && el.querySelector('.navarrow'); if (a) a.style.transform = 'rotate(' + h + 'deg)'; }
-const onOrient = e => { const h = e.webkitCompassHeading != null ? e.webkitCompassHeading : (e.absolute && e.alpha != null ? 360 - e.alpha : null); if (h != null && isFinite(h)) setArrow(h); };
+const arrowIcon = L.divIcon({ className: '', html: '<div class="navarrow" style="width:0;height:0;border-left:11px solid transparent;border-right:11px solid transparent;border-bottom:26px solid #f7c600;filter:drop-shadow(0 0 3px #000);transition:transform .18s linear"></div>', iconSize: [22, 26], iconAnchor: [11, 13] });
+let hSin = 0, hCos = 1, hInit = false, hLast = 0, hShown = null, hCum = 0, gpsMoving = false;
+function setArrow(deg) { const el = navMarker && navMarker.getElement(), a = el && el.querySelector('.navarrow'); if (a) a.style.transform = 'rotate(' + deg + 'deg)'; }
+/* 方向：先把角度平滑（用圓周平均，避免 359°→1° 亂跳），每 0.12 秒最多更新一次，變化不足 4° 不動；轉動時沿最短方向轉 */
+function pushHeading(h, w) {
+  const r = h * Math.PI / 180;
+  if (!hInit) { hSin = Math.sin(r); hCos = Math.cos(r); hInit = true; } else { hSin += (Math.sin(r) - hSin) * w; hCos += (Math.cos(r) - hCos) * w; }
+  const t = performance.now(); if (t - hLast < 120) return; hLast = t;
+  let d = Math.atan2(hSin, hCos) * 180 / Math.PI; if (d < 0) d += 360;
+  if (hShown === null) { hShown = d; hCum = d; setArrow(hCum); return; }
+  const delta = ((d - hShown + 540) % 360) - 180;
+  if (Math.abs(delta) < 4) return;
+  hShown = d; hCum += delta; setArrow(hCum);
+}
+/* 手機直握時，「頂部指向的方向」要用 alpha、beta、gamma 三個角度一起算，不能只用 alpha */
+function compassHeading(alpha, beta, gamma) {
+  const x = beta * Math.PI / 180, y = gamma * Math.PI / 180, z = alpha * Math.PI / 180;
+  const cY = Math.cos(y), cZ = Math.cos(z), sX = Math.sin(x), sY = Math.sin(y), sZ = Math.sin(z);
+  const Vx = -cZ * sY - sZ * sX * cY, Vy = -sZ * sY + cZ * sX * cY;
+  let h = Math.atan(Vx / Vy);
+  if (Vy < 0) h += Math.PI; else if (Vx < 0) h += 2 * Math.PI;
+  return h * 180 / Math.PI;
+}
+const onOrient = e => {
+  if (gpsMoving) return;                       // 走動時用 GPS 行進方向，比較穩定
+  if (e.type === 'deviceorientation' && !e.absolute) return; // 只用指向正北的絕對方向
+  if (e.alpha == null || e.beta == null || e.gamma == null) return;
+  let h = compassHeading(e.alpha, e.beta, e.gamma);
+  if (!isFinite(h)) return;
+  h = (h + ((screen.orientation && screen.orientation.angle) || 0)) % 360;
+  pushHeading(h, 0.12);
+};
 function navStop() {
   if (navId !== null && navigator.geolocation) navigator.geolocation.clearWatch(navId);
-  navId = null; navLast = 0;
+  navId = null; navLast = 0; hInit = false; hShown = null; hCum = 0; gpsMoving = false;
   window.removeEventListener('deviceorientationabsolute', onOrient, true); window.removeEventListener('deviceorientation', onOrient, true);
   if (navMarker) { map.removeLayer(navMarker); navMarker = null; }
   if (navLine) { map.removeLayer(navLine); navLine = null; }
@@ -1065,23 +1104,21 @@ function navStart() {
   const item = current[selectedIdx]; if (!item) return;
   const nt = searchState.net, L0 = item.plan.legs[0], bs = nt.stops.get(L0.r.stops[L0.i]);
   if (!navigator.geolocation) { toast('這個瀏覽器不支援定位'); return; }
-  $('#navInfo').hidden = false; $('#navInfo').textContent = '定位中…';
-  try { if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) DeviceOrientationEvent.requestPermission().catch(() => {}); } catch (e) { /* 忽略 */ }
   window.addEventListener('deviceorientationabsolute', onOrient, true); window.addEventListener('deviceorientation', onOrient, true);
   let first = true;
   navId = navigator.geolocation.watchPosition(async p => {
     const me = { lat: p.coords.latitude, lng: p.coords.longitude };
     if (navMarker) navMarker.setLatLng([me.lat, me.lng]); else navMarker = L.marker([me.lat, me.lng], { icon: arrowIcon, zIndexOffset: 1000 }).addTo(map);
-    if (p.coords.heading != null && p.coords.speed > 0.8) setArrow(p.coords.heading);
+    gpsMoving = p.coords.heading != null && isFinite(p.coords.heading) && p.coords.speed > 1.2;
+    if (gpsMoving) pushHeading(p.coords.heading, 0.5);
     if (first && lastBounds) { first = false; map.fitBounds(L.latLngBounds(lastBounds.getSouthWest(), lastBounds.getNorthEast()).extend([me.lat, me.lng]), { padding: [40, 90] }); }
     const now = Date.now(); if (now - navLast < 8000) return; navLast = now;
     const d = hav(me.lat, me.lng, bs.lat, bs.lng);
-    if (d < 25) { $('#navInfo').textContent = '已到達上車站'; return; }
+    if (d < 25) return;
     await pedRoute(me, bs);
     if (navId === null) return;
     const key = pedKey(me, bs), len = pedCache.get(key) ?? d * DETOUR, path = pedPath.get(key) || [[me.lat, me.lng], [bs.lat, bs.lng]];
     if (navLine) navLine.setLatLngs(path); else navLine = L.polyline(path, { color: '#0d7a69', weight: 6, opacity: .95 }).addTo(map);
-    $('#navInfo').textContent = `距離上車站約 ${Math.round(len)} 米，步行約 ${Math.max(1, Math.ceil(len / WALK_M_PER_MIN))} 分鐘`;
   }, e => { toast('未能取得位置（' + (e.code === 1 ? '你沒有允許定位' : '定位失敗') + '）'); navStop(); }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
 }
 function refreshGo() {
@@ -1618,7 +1655,7 @@ function renderResults() {
       const sched = l.board.rmk && l.board.rmk.indexOf('原定') >= 0 ? '（原定班次）' : '';
       const w = Math.max(0, Math.round(l.wait / 60000));
       return (k > 0 ? `<div class="sub trw">轉乘 ${esc(l.r.route)}：預計等候約 <span class="wt ${w < 5 ? 'y' : 'g'}">${w} 分鐘</span>${sched}</div>` : '') +
-        `<div class="sub">${rtBadge(l.r, k)}${isKmb(l.r) ? '' : '（城巴）'} 往${esc(l.r.dest)}：「<span class="tstop">${esc(bs.name)}</span>」上車（${minTxt(l.nextMin)}${l.next2Min != null ? '、' + minTxt(l.next2Min) : ''}${sched}），乘 ${l.nStops} 站，「${k < ev.legs.length - 1 ? `<span class="tstop">${esc(as.name)}</span>` : esc(as.name)}」下車${l.est ? '（後段行車時間估算）' : ''}${l.synth ? '（班次按間隔估算）' : ''}</div>`;
+        `<div class="sub">${rtBadge(l.r, k)}${isKmb(l.r) ? '' : '（城巴）'}：「<span class="tstop">${esc(bs.name)}</span>」上車（${minTxt(l.nextMin)}${l.next2Min != null ? '、' + minTxt(l.next2Min) : ''}${sched}），乘 ${l.nStops} 站，「${k < ev.legs.length - 1 ? `<span class="tstop">${esc(as.name)}</span>` : esc(as.name)}」下車${l.est ? '（後段行車時間估算）' : ''}${l.synth ? '（班次按間隔估算）' : ''}</div>`;
     }).join('') + ((alts && alts.length) ? `<div class="sub alts"><b>也可乘（同樣上下車站、趕同一班車）：</b>${alts.map((a, ai) => '<div>' + a.ev.legs.map((l, kk) => { const w = Math.max(0, Math.round(l.wait / 60000)); return rtBadge(l.r, kk, ai) + ' 候車 <span class="wt ' + (w < 5 ? 'y' : 'g') + '">' + w + ' 分</span>' + (l.board.rmk && l.board.rmk.indexOf('原定') >= 0 ? '（原定班次）' : ''); }).join(' → ') + '，約 ' + Math.max(1, Math.round(a.ev.totalSec / 60)) + ' 分鐘</div>').join('')}</div>` : '');
     return `<div class="res" role="button" tabindex="0" data-idx="${idx}" aria-selected="${idx === selectedIdx}">
       <div class="top"><div class="tot">約 <b>${mins}</b> 分鐘${ev.transfers ? (tag ? '' : `<span class="tag">轉${ev.transfers}次車</span>`) : '<span class="tag">直達</span>'}${tag ? `<span class="tag good${ev.transfers ? ' sm' : ''}">${esc(tag)}</span>` : ''}${ev.est ? '<span class="tag warn">含估算</span>' : ''}</div>
@@ -1677,7 +1714,7 @@ let etaCtx = null;
 async function loadEta() {
   if (!etaCtx) return;
   const { r, i, nt } = etaCtx;
-  $('#etaTitle').innerHTML = rtBadge(r) + ' ' + esc(nt.stops.get(r.stops[i]).name);
+  $('#etaTitle').innerHTML = rtBadge(r) + ' 往' + esc(r.dest) + '<div class="hint" style="font-weight:400">' + esc(nt.stops.get(r.stops[i]).name) + '</div>';
   $('#etaBody').textContent = '查詢中…';
   const st = new Map(); await fetchEta(boardKey({ r, i }), st);
   const list = etaAt(r, i, st), now = Date.now();
