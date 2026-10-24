@@ -171,10 +171,9 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 .tag{font-size:11px;font-weight:600}
 /* ===== v12 科技感外觀（固定深色） ===== */
 :root{--bg:#0a111a;--card:rgba(15,24,36,.86);--fg:#e8f1f5;--muted:#8fa1ad;--line:rgba(255,255,255,.09);--soft:rgba(255,255,255,.06);--accent:#27d3b0;--accent-fg:#04201a;color-scheme:dark}
-.leaflet-tile-pane{filter:invert(1) hue-rotate(195deg) brightness(.74) contrast(.95) saturate(.55)}
 #homeBox,.fab,.brand,#sum,#peek,#etaBox{backdrop-filter:blur(14px) saturate(1.2);-webkit-backdrop-filter:blur(14px) saturate(1.2)}
 .fab{background:rgba(14,22,33,.82);border:1px solid var(--line);color:var(--accent)}
-.brand{background:transparent;box-shadow:none;font-weight:300;letter-spacing:.2em;color:#f2fbff;text-shadow:0 0 14px rgba(39,211,176,.6),0 1px 3px rgba(0,0,0,.8)}
+.brand{background:rgba(12,20,31,.84);border:1px solid var(--line);font-weight:300;letter-spacing:.2em;color:#f2fbff;text-shadow:0 0 12px rgba(39,211,176,.55)}
 #homeBox{background:rgba(12,20,31,.84);border:1px solid rgba(39,211,176,.28);border-radius:22px;box-shadow:0 0 26px rgba(39,211,176,.12),0 10px 30px rgba(0,0,0,.55)}
 #homeBox input[type=text]{background:rgba(255,255,255,.06);border:1px solid var(--line);color:var(--fg)}
 #homeBox input[type=text]:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 3px rgba(39,211,176,.2)}
@@ -199,6 +198,10 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 .tag.good{background:rgba(39,211,176,.16);color:#7ff0d8}
 .tag.warn{background:transparent;border:1px solid rgba(245,184,61,.5);color:#f5b83d}
 .dbg{opacity:.7}
+.res .leg .arrw{display:inline-flex;flex-direction:column;align-items:center;color:var(--muted);line-height:1.1}
+.res .leg .arrw small{font-size:10px;font-weight:300;margin-top:1px;letter-spacing:.04em}
+.res .tot{font-size:13px}
+.res .tot b{font-size:22px}
 </style>
 </head>
 <body data-view="home">
@@ -209,7 +212,7 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 </div>
 <div id="envWarn" class="banner" hidden style="position:fixed;z-index:1300;left:12px;right:12px;top:70px"></div>
 <button type="button" class="fab" id="btnSet" aria-label="設定">⚙</button>
-<div class="brand">飛巴<span class="ver">v12</span></div>
+<div class="brand">飛巴<span class="ver">v12.1</span></div>
 <button type="button" class="fab" id="locate" aria-label="回到目前位置">◎</button>
 
 <div id="homeBox">
@@ -1150,7 +1153,7 @@ function navStart() {
     await pedRoute(me, bs);
     if (navId === null) return;
     const key = pedKey(me, bs), len = pedCache.get(key) ?? d * DETOUR, path = pedPath.get(key) || [[me.lat, me.lng], [bs.lat, bs.lng]];
-    if (navLine) navLine.setLatLngs(path); else navLine = L.polyline(path, { color: '#27d3b0', weight: 5, opacity: .95 }).addTo(map);
+    if (navLine) navLine.setLatLngs(path); else navLine = L.polyline(path, { color: '#0aa58a', weight: 5, opacity: .95 }).addTo(map);
   }, e => { toast('未能取得位置（' + (e.code === 1 ? '你沒有允許定位' : '定位失敗') + '）'); navStop(); }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
 }
 function refreshGo() {
@@ -1313,7 +1316,7 @@ function onType(which) {
 
 /* ---------- 搜索 ---------- */
 let dbgPlans = []; let chaseInfo = ''; let directReport = []; let current = []; let nDirect = 0, shownD = 0, shownT = 0; let selectedIdx = -1; let searchState = null;
-const LEG_COLORS = ['#27d3b0', '#4aa8ff', '#c084fc', '#f5b83d'];
+const LEG_COLORS = ['#0aa58a', '#2f7de1', '#8b5cf6', '#e8890c'];
 
 async function pool(items, n, fn, onDone) {
   let i = 0;
@@ -1687,7 +1690,7 @@ function renderResults() {
       const sched = l.board.rmk && l.board.rmk.indexOf('原定') >= 0;
       const w = Math.max(0, Math.round(l.wait / 60000));
       return (k > 0 ? `<div class="sub trw">轉乘 <b>${esc(l.r.route)}</b> · 等 <span class="wt ${w < 5 ? 'y' : 'g'}">${w} 分鐘</span>${sched ? ' · 原定班次' : ''}</div>` : '') +
-        `<div class="sub leg">${rtBadge(l.r, k)}<span class="tstop">${esc(bs.name)}</span><span class="arr">→</span><span class="${k < ev.legs.length - 1 ? 'tstop' : 'stp'}">${esc(as.name)}</span><span class="cnt">${l.nStops} 站</span></div>`;
+        `<div class="sub leg">${rtBadge(l.r, k)}<span class="tstop">${esc(bs.name)}</span><span class="arrw">→<small>${l.nStops} 站</small></span><span class="${k < ev.legs.length - 1 ? 'tstop' : 'stp'}">${esc(as.name)}</span></div>`;
     }).join('') + ((alts && alts.length) ? `<div class="sub alts"><b>也可乘</b>${alts.map((a, ai) => '<div>' + a.ev.legs.map((l, kk) => { const w = Math.max(0, Math.round(l.wait / 60000)); return rtBadge(l.r, kk, ai) + ' <span class="wt ' + (w < 5 ? 'y' : 'g') + '">' + w + ' 分</span>' + (l.board.rmk && l.board.rmk.indexOf('原定') >= 0 ? '（原定班次）' : ''); }).join(' → ') + '，約 ' + Math.max(1, Math.round(a.ev.totalSec / 60)) + ' 分鐘</div>').join('')}</div>` : '');
     return `<div class="res" role="button" tabindex="0" data-idx="${idx}" aria-selected="${idx === selectedIdx}">
       <div class="top"><div class="tot">約 <b>${mins}</b> 分鐘${ev.transfers ? (tag ? '' : `<span class="tag">轉${ev.transfers}次車</span>`) : '<span class="tag">直達</span>'}${tag ? `<span class="tag good${ev.transfers ? ' sm' : ''}">${esc(tag)}</span>` : ''}${ev.est ? '<span class="tag warn">含估算</span>' : ''}</div>
@@ -1730,14 +1733,14 @@ async function selectResult(idx) {
   ev.legs.forEach((l, k) => {
     const col = LEG_COLORS[k % LEG_COLORS.length], [bs, as] = stopsOf(l);
     const seg = l.r.stops.slice(l.i, l.j + 1).map(id => { const x = nt.stops.get(id); return [x.lat, x.lng]; });
-    L.polyline(seg, { color: col, weight: 12, opacity: .16 }).addTo(routeLayer);
-    L.polyline(seg, { color: col, weight: 4, opacity: .95 }).addTo(routeLayer); allPts.push(...seg);
-    seg.forEach(q => L.circleMarker(q, { radius: 4, color: col, weight: 2, fillColor: '#0d1620', fillOpacity: 1 }).addTo(routeLayer));
-    walk(prev, bs, '#e8f1f5');
+    L.polyline(seg, { color: '#fff', weight: 9, opacity: .95, lineCap: 'round' }).addTo(routeLayer);
+    L.polyline(seg, { color: col, weight: 5, opacity: 1, lineCap: 'round' }).addTo(routeLayer); allPts.push(...seg);
+    seg.forEach(q => L.circleMarker(q, { radius: 4, color: col, weight: 2, fillColor: '#fff', fillOpacity: 1 }).addTo(routeLayer));
+    walk(prev, bs, '#0d1620');
     L.marker([bs.lat, bs.lng], { icon: pinIcon(k === 0 ? 'u' : 'x', k === 0 ? '上' : '轉') }).addTo(routeLayer);
     prev = as;
   });
-  walk(prev, pts.d, '#e8f1f5');
+  walk(prev, pts.d, '#0d1620');
   lastBounds = L.latLngBounds(allPts);
   map.fitBounds(lastBounds, { paddingTopLeft: [30, 70], paddingBottomRight: [30, Math.round(innerHeight * 0.5) + 20] });
 }
