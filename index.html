@@ -202,6 +202,9 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 .res .leg .arrw small{font-size:10px;font-weight:300;margin-top:1px;letter-spacing:.04em}
 .res .tot{font-size:13px}
 .res .tot b{font-size:22px}
+.flowband{filter:blur(.4px)}
+.flow{stroke-dasharray:2 16;stroke-linecap:round;animation:flowdash 1s linear infinite;filter:drop-shadow(0 0 3px rgba(255,255,255,.9))}
+@keyframes flowdash{to{stroke-dashoffset:-18}}
 </style>
 </head>
 <body data-view="home">
@@ -212,7 +215,7 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 </div>
 <div id="envWarn" class="banner" hidden style="position:fixed;z-index:1300;left:12px;right:12px;top:70px"></div>
 <button type="button" class="fab" id="btnSet" aria-label="設定">⚙</button>
-<div class="brand">飛巴<span class="ver">v12.4</span></div>
+<div class="brand">飛巴<span class="ver">v13</span></div>
 <button type="button" class="fab" id="locate" aria-label="回到目前位置">◎</button>
 
 <div id="homeBox">
@@ -1731,6 +1734,160 @@ function renderResults() {
   const more = $('#more');
   if (more) more.onclick = () => { shownD = Math.min(nDirect, shownD + 5); shownT = Math.min(current.length - nDirect, shownT + 10); renderResults(); };
 }
+
+/* ---------- 道路網絡：把兩個巴士站之間的直線貼到道路上，並找出途經的擠塞路段 ----------
+   資料：運輸署「道路網絡（第二代）」道路中線（空間數據共享平台，只向伺服器要方案所在的小範圍）
+         運輸署「道路網絡路段的行車速度」（每 2 分鐘更新，路段編號 = 道路中線的 ROUTE_ID） */
+const WFS_URL = 'https://portal.csdi.gov.hk/server/services/common/td_rcd_1638949160594_2844/MapServer/WFSServer';
+const SPEED_URL = 'https://resource.data.one.gov.hk/td/traffic-detectors/irnAvgSpeed-all.xml';
+const SLOW_KMH = 30, JAM_KMH = 15;   // 低於 30 公里/小時算緩慢，低於 15 公里/小時算擠塞
+class MinHeap {
+  constructor() { this.a = []; }
+  get size() { return this.a.length; }
+  push(c, v) { const a = this.a; a.push([c, v]); let i = a.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (a[p][0] <= a[i][0]) break; [a[p], a[i]] = [a[i], a[p]]; i = p; } }
+  pop() { const a = this.a, top = a[0], last = a.pop(); if (a.length) { a[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < a.length && a[l][0] < a[m][0]) m = l; if (r < a.length && a[r][0] < a[m][0]) m = r; if (m === i) break; [a[m], a[i]] = [a[i], a[m]]; i = m; } } return top; }
+}
+const RoadNet = (() => {
+  const adj = new Map(), edges = [], grid = new Map(), seen = new Set(), C = 0.0005;
+  const key = (lng, lat) => Math.round(lng * 1e5) + ',' + Math.round(lat * 1e5);
+  const cell = (lng, lat) => Math.floor(lat / C) + ',' + Math.floor(lng / C);
+  const link = (a, b, w, e, ok) => { let l = adj.get(a); if (!l) adj.set(a, l = []); l.push({ to: b, w, e, ok }); };
+  function addEdge(p, q, rid, dir) {
+    const a = key(p[0], p[1]), b = key(q[0], q[1]); if (a === b) return;
+    const w = hav(p[1], p[0], q[1], q[0]), e = { a, b, p, q, w, rid, dir }, id = edges.push(e) - 1;
+    link(a, b, w, e, dir !== 3); link(b, a, w, e, dir !== 2);   // 方向碼 2＝只可由 a 到 b，3＝只可由 b 到 a，其他＝雙向
+    const n = Math.max(1, Math.ceil(w / 40));
+    for (let k = 0; k <= n; k++) { const t = k / n, c = cell(p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t); let g = grid.get(c); if (!g) grid.set(c, g = []); if (g[g.length - 1] !== id) g.push(id); }
+  }
+  function addFeatures(fc) {
+    for (const f of (fc.features || [])) {
+      const pr = f.properties || {}, id = f.id || pr.OBJECTID; if (seen.has(id)) continue; seen.add(id);
+      const g = f.geometry; if (!g) continue;
+      const lines = g.type === 'MultiLineString' ? g.coordinates : g.type === 'LineString' ? [g.coordinates] : [];
+      for (const ln of lines) for (let i = 1; i < ln.length; i++) addEdge(ln[i - 1], ln[i], pr.ROUTE_ID, +pr.TRAVEL_DIRECTION || 1);
+    }
+  }
+  function snap(lat, lng, maxM) {
+    const k0 = Math.floor(lat / C), j0 = Math.floor(lng / C), R = Math.ceil(maxM / 55), kx = 111320 * Math.cos(lat * Math.PI / 180), ky = 111320, tried = new Set();
+    let best = null;
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+      const g = grid.get((k0 + dy) + ',' + (j0 + dx)); if (!g) continue;
+      for (const id of g) {
+        if (tried.has(id)) continue; tried.add(id);
+        const e = edges[id], ax = (e.p[0] - lng) * kx, ay = (e.p[1] - lat) * ky, bx = (e.q[0] - lng) * kx, by = (e.q[1] - lat) * ky;
+        const dxs = bx - ax, dys = by - ay, L2 = dxs * dxs + dys * dys;
+        let u = L2 ? -(ax * dxs + ay * dys) / L2 : 0; u = Math.max(0, Math.min(1, u));
+        const d = Math.hypot(ax + u * dxs, ay + u * dys);
+        if (d <= maxM && (!best || d < best.d)) best = { e, u, d, pt: [e.p[0] + (e.q[0] - e.p[0]) * u, e.p[1] + (e.q[1] - e.p[1]) * u] };
+      }
+    }
+    return best;
+  }
+  /* 由 P 站到 Q 站沿道路的最短路徑；strict＝遵守單程路方向。找不到或超過 limit 米就傳回 null */
+  function route(P, Q, strict, limit) {
+    const s = snap(P.lat, P.lng, 120), t = snap(Q.lat, Q.lng, 120);
+    if (!s || !t) return null;
+    if (s.e === t.e) {   // 兩個站在同一段道路上：直接沿這段道路走
+      const e = s.e, fwd = t.u >= s.u, len0 = Math.abs(t.u - s.u) * e.w, ll0 = pt => [pt[1], pt[0]];
+      if ((strict && (fwd ? e.dir === 3 : e.dir === 2)) || len0 > limit) return null;
+      return { len: len0, coords: [ll0(s.pt), ll0(t.pt)], segs: [{ rid: e.rid, a: ll0(s.pt), b: ll0(t.pt) }] };
+    }
+    const dist = new Map(), prev = new Map(), h = new MinHeap(), tgt = new Map();
+    const start = (n, c, ok) => { if (strict && !ok) return; if (c < (dist.get(n) ?? Infinity)) { dist.set(n, c); prev.set(n, null); h.push(c, n); } };
+    start(s.e.b, (1 - s.u) * s.e.w, s.e.dir !== 3); start(s.e.a, s.u * s.e.w, s.e.dir !== 2);
+    const addT = (n, x, ok) => { if (strict && !ok) return; if (!tgt.has(n) || x < tgt.get(n)) tgt.set(n, x); };
+    addT(t.e.a, t.u * t.e.w, t.e.dir !== 3); addT(t.e.b, (1 - t.u) * t.e.w, t.e.dir !== 2);
+    let bestC = Infinity, bestN = null;
+    while (h.size) {
+      const [c, n] = h.pop();
+      if (c > (dist.get(n) ?? Infinity)) continue;
+      if (c >= bestC) break;
+      if (tgt.has(n) && c + tgt.get(n) < bestC) { bestC = c + tgt.get(n); bestN = n; }
+      for (const x of (adj.get(n) || [])) {
+        if (strict && !x.ok) continue;
+        const nc = c + x.w;
+        if (nc < limit && nc < (dist.get(x.to) ?? Infinity)) { dist.set(x.to, nc); prev.set(x.to, { from: n, x }); h.push(nc, x.to); }
+      }
+    }
+    if (bestN === null) return null;
+    const chain = []; let n = bestN;
+    while (prev.get(n)) { chain.push(prev.get(n)); n = prev.get(n).from; }
+    chain.reverse();
+    const root = n, ll = pt => [pt[1], pt[0]], nodePt = (node, e) => (node === e.b ? e.q : e.p);
+    const coords = [ll(s.pt), ll(nodePt(root, s.e))], segs = [{ rid: s.e.rid, a: ll(s.pt), b: ll(nodePt(root, s.e)) }];
+    for (const { from, x } of chain) {
+      const a = ll(nodePt(from, x.e)), b = ll(nodePt(x.to, x.e));
+      coords.push(b); segs.push({ rid: x.e.rid, a, b });
+    }
+    const last = ll(nodePt(bestN, t.e)), end = ll(t.pt);
+    coords.push(end); segs.push({ rid: t.e.rid, a: last, b: end });
+    return { len: bestC, coords, segs };
+  }
+  return { addFeatures, route, size: () => edges.length };
+})();
+/* 一程巴士的所有相鄰站：能貼到道路的貼路，貼不到的保持直線 */
+function routeLeg(P) {
+  const coords = [], segs = []; let ok = 0;
+  for (let i = 1; i < P.length; i++) {
+    const a = P[i - 1], b = P[i], lim = 2.2 * hav(a.lat, a.lng, b.lat, b.lng) + 250;
+    const r = RoadNet.route(a, b, true, lim) || RoadNet.route(a, b, false, lim);
+    if (r) { coords.push(...r.coords); segs.push(...r.segs); ok++; }
+    else { coords.push([a.lat, a.lng], [b.lat, b.lng]); segs.push({ rid: null, a: [a.lat, a.lng], b: [b.lat, b.lng] }); }
+  }
+  return { coords, segs, ok, total: P.length - 1 };
+}
+const roadTiles = new Map();   // 已載入（或載入中）的小範圍
+async function ensureRoadTiles(legPts) {
+  const T = 0.01, need = new Map();
+  const add = (lat, lng) => { const ty = Math.floor(lat / T), tx = Math.floor(lng / T), k = ty + ',' + tx; if (!roadTiles.has(k)) need.set(k, [ty, tx]); };
+  for (const P of legPts) for (let i = 0; i < P.length; i++) {
+    add(P[i].lat, P[i].lng);
+    if (i) { const a = P[i - 1], b = P[i], n = Math.max(1, Math.ceil(hav(a.lat, a.lng, b.lat, b.lng) / 400)); for (let q = 1; q < n; q++) add(a.lat + (b.lat - a.lat) * q / n, a.lng + (b.lng - a.lng) * q / n); }
+  }
+  const pad = 0.0012;
+  await pool([...need.entries()], 6, async ([k, [ty, tx]]) => {
+    try {
+      const box = [ty * T - pad, tx * T - pad, (ty + 1) * T + pad, (tx + 1) * T + pad].join(',');
+      const g = await getJSON(WFS_URL + '?service=WFS&version=2.0.0&request=GetFeature&typeNames=csdi:CENTERLINE&outputFormat=GEOJSON&srsName=EPSG:4326&bbox=' + box + ',EPSG:4326', 40000, 1);
+      RoadNet.addFeatures(g); roadTiles.set(k, true);
+    } catch (e) { /* 這一格載入失敗：該段維持直線 */ }
+  });
+}
+let speedMap = null, speedAt = 0;
+async function loadSpeeds() {
+  if (speedMap && Date.now() - speedAt < 120000) return speedMap;
+  const t = await getText(SPEED_URL, 30000), d = new DOMParser().parseFromString(t, 'text/xml'), m = new Map();
+  const tx = (e, tag) => { const x = e.getElementsByTagName(tag)[0]; return x ? x.textContent.trim() : ''; };
+  for (const e of d.getElementsByTagName('segment')) { const id = tx(e, 'segment_id'), v = parseFloat(tx(e, 'speed')); if (id && tx(e, 'valid') === 'Y' && v >= 0) m.set(id, v); }
+  speedMap = m; speedAt = Date.now(); return m;
+}
+/* 查看方案時：把直線換成沿道路的路線，並把途經的緩慢、擠塞路段用流動光線標出 */
+async function drawRoad(idx, legs, nt, legLines) {
+  try {
+    const pts = legs.map(l => l.r.stops.slice(l.i, l.j + 1).map(id => nt.stops.get(id)));
+    await ensureRoadTiles(pts);
+    if (selectedIdx !== idx) return;
+    const speeds = await loadSpeeds().catch(() => null);
+    if (selectedIdx !== idx) return;
+    legs.forEach((l, k) => {
+      const res = routeLeg(pts[k]);
+      if (res.ok < Math.ceil(res.total * 0.6)) return;          // 貼到道路的段數太少，保留直線
+      const col = LEG_COLORS[k % LEG_COLORS.length];
+      (legLines[k] || []).forEach(x => routeLayer.removeLayer(x));
+      L.polyline(res.coords, { color: '#fff', weight: 9, opacity: .95, lineCap: 'round', lineJoin: 'round' }).addTo(routeLayer);
+      L.polyline(res.coords, { color: col, weight: 5, opacity: 1, lineCap: 'round', lineJoin: 'round' }).addTo(routeLayer);
+      if (!speeds) return;
+      let run = null;
+      const flush = () => { if (!run) return; L.polyline(run.pts, { color: run.c, weight: 9, opacity: .5, lineCap: 'round', className: 'flowband' }).addTo(routeLayer); L.polyline(run.pts, { color: '#fff', weight: 3, opacity: .95, className: 'flow' }).addTo(routeLayer); run = null; };
+      for (const sg of res.segs) {
+        const v = sg.rid == null ? undefined : speeds.get(String(sg.rid)), c = v === undefined ? null : v < JAM_KMH ? '#e5322d' : v < SLOW_KMH ? '#f59e0b' : null;
+        if (c && run && run.c === c) run.pts.push(sg.b); else { flush(); if (c) run = { c, pts: [sg.a, sg.b] }; }
+      }
+      flush();
+    });
+  } catch (e) { /* 失敗就保留直線 */ }
+}
+
 async function selectResult(idx) {
   const item = current[idx]; if (!item) return;
   const { ev } = item, nt = searchState.net;
@@ -1752,11 +1909,11 @@ async function selectResult(idx) {
     if (path) allPts.push(...path);
   };
   prev = pts.o;
+  const legLines = [];
   ev.legs.forEach((l, k) => {
     const col = LEG_COLORS[k % LEG_COLORS.length], [bs, as] = stopsOf(l);
     const seg = l.r.stops.slice(l.i, l.j + 1).map(id => { const x = nt.stops.get(id); return [x.lat, x.lng]; });
-    L.polyline(seg, { color: '#fff', weight: 9, opacity: .95, lineCap: 'round' }).addTo(routeLayer);
-    L.polyline(seg, { color: col, weight: 5, opacity: 1, lineCap: 'round' }).addTo(routeLayer); allPts.push(...seg);
+    legLines.push([L.polyline(seg, { color: '#fff', weight: 9, opacity: .95, lineCap: 'round' }).addTo(routeLayer), L.polyline(seg, { color: col, weight: 5, opacity: 1, lineCap: 'round' }).addTo(routeLayer)]); allPts.push(...seg);
     seg.forEach(q => L.circleMarker(q, { radius: 4, color: col, weight: 2, fillColor: '#fff', fillOpacity: 1 }).addTo(routeLayer));
     walk(prev, bs, '#0d1620');
     L.marker([bs.lat, bs.lng], { icon: pinIcon(k === 0 ? 'u' : 'x', k === 0 ? '上' : '轉') }).addTo(routeLayer);
@@ -1764,6 +1921,7 @@ async function selectResult(idx) {
   });
   walk(prev, pts.d, '#0d1620');
   lastBounds = L.latLngBounds(allPts);
+  drawRoad(idx, ev.legs, nt, legLines);
   map.fitBounds(lastBounds, { paddingTopLeft: [30, 70], paddingBottomRight: [30, Math.round(innerHeight * 0.5) + 20] });
 }
 
