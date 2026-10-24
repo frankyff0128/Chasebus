@@ -212,7 +212,7 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 </div>
 <div id="envWarn" class="banner" hidden style="position:fixed;z-index:1300;left:12px;right:12px;top:70px"></div>
 <button type="button" class="fab" id="btnSet" aria-label="設定">⚙</button>
-<div class="brand">飛巴<span class="ver">v12.3</span></div>
+<div class="brand">飛巴<span class="ver">v12.4</span></div>
 <button type="button" class="fab" id="locate" aria-label="回到目前位置">◎</button>
 
 <div id="homeBox">
@@ -1457,6 +1457,7 @@ async function runSearch() {
       const fastestD = D.find(x => rnd(x.ev) === bestD);
       smartSort(D);
       const T2 = T.filter(x => bestD === null || rnd(x.ev) < bestD);
+      if (T2.length) { const mT = Math.min(...T2.map(x => rnd(x.ev))); T2.splice(0, T2.length, ...T2.filter(x => rnd(x.ev) <= mT + 15)); } // 比最快的轉乘方案慢超過 15 分鐘就不顯示
       smartSort(T2);
       { // 合併：轉乘次數相同、最後一程是同一班車（同一路線同一上車站）的方案併成一張卡片，其餘路線列在「也可乘」，並顯示各自的候車時間
         const gm = new Map(), grouped = [];
@@ -1787,6 +1788,13 @@ function showEta(idx, k, a) {
 
 /* ---------- 資料測試（只檢查巴士路線與到站資料） ---------- */
 const diagLines = [];
+const WFS = 'https://portal.csdi.gov.hk/server/services/common/td_rcd_1638949160594_2844/MapServer/WFSServer';
+const wfsLayer = async () => {
+  const t = await getText(WFS + '?service=WFS&request=GetCapabilities', 30000);
+  const d = new DOMParser().parseFromString(t, 'text/xml');
+  const names = [...d.getElementsByTagNameNS('*', 'FeatureType')].map(f => { const n = f.getElementsByTagNameNS('*', 'Name')[0]; return n ? n.textContent : ''; }).filter(Boolean);
+  return { names, pick: names.find(n => /center|centre|rcl/i.test(n)) || names[0] };
+};
 const tests = [
   ['道路車速（irnAvgSpeed-all.xml，每 2 分鐘更新）', async () => {
     const t = await getText('https://resource.data.one.gov.hk/td/traffic-detectors/irnAvgSpeed-all.xml', 30000);
@@ -1797,20 +1805,29 @@ const tests = [
     const good = segs.filter(x => x.ok === 'Y' && x.v >= 0);
     return `資料時間 ${val(d.documentElement, 'date')} ${val(d.documentElement, 'time')}；共 ${segs.length} 段、有效 ${good.length} 段；車速低於 30 公里/小時 ${good.filter(x => x.v < 30).length} 段、低於 15 公里/小時 ${good.filter(x => x.v < 15).length} 段；約 ${Math.round(t.length / 1024)} KB；前 3 段：${segs.slice(0, 3).map(x => x.id + '=' + x.v + '(' + x.ok + ')').join('，')}`;
   }],
-  ['道路中線位置（空間數據共享平台 WFS，網址為推測）', async () => {
-    const base = 'https://portal.csdi.gov.hk/server/services/common/td_rcd_1638949160594_2844/MapServer/WFSServer';
-    const t = await getText(base + '?service=WFS&request=GetCapabilities', 30000);
-    const d = new DOMParser().parseFromString(t, 'text/xml');
-    const names = [...d.getElementsByTagName('FeatureType')].map(f => { const n = f.getElementsByTagName('Name')[0]; return n ? n.textContent : ''; }).filter(Boolean);
-    if (!names.length) throw new Error('讀到回應但找不到圖層：' + t.slice(0, 200));
-    const pick = names.find(n => /center|centre|rcl/i.test(n)) || names[0];
+  ['道路中線位置：圖層清單與樣本（空間數據共享平台 WFS）', async () => {
+    const { names, pick } = await wfsLayer();
+    if (!names.length) throw new Error('讀到回應但找不到圖層');
     let sample = '';
     try {
-      const g = await getJSON(base + '?service=WFS&version=2.0.0&request=GetFeature&typeNames=' + encodeURIComponent(pick) + '&count=2&outputFormat=GEOJSON&srsName=EPSG:4326', 30000, 1);
+      const g = await getJSON(WFS + '?service=WFS&version=2.0.0&request=GetFeature&typeNames=' + encodeURIComponent(pick) + '&count=2&outputFormat=GEOJSON&srsName=EPSG:4326', 30000, 1);
       const f = g.features && g.features[0];
-      sample = f ? `；樣本圖層 ${pick}：形狀 ${f.geometry && f.geometry.type}，欄位 ${Object.keys(f.properties || {}).join(',')}，第一筆 ${JSON.stringify(f.properties).slice(0, 200)}` : '；查詢沒有回傳資料';
+      sample = f ? `；樣本圖層 ${pick}：形狀 ${f.geometry && f.geometry.type}，欄位 ${Object.keys(f.properties || {}).join(',')}，第一筆 ${JSON.stringify(f.properties).slice(0, 220)}` : '；查詢沒有回傳資料';
     } catch (e) { sample = '；圖層 ' + pick + ' 查詢失敗：' + e.message; }
     return `圖層 ${names.length} 個：${names.join('、').slice(0, 300)}${sample}`;
+  }],
+  ['道路中線：小範圍查詢（九龍城至土瓜灣一帶）', async () => {
+    const { pick } = await wfsLayer();
+    const tryBox = async box => {
+      const t0 = Date.now();
+      const t = await getText(WFS + '?service=WFS&version=2.0.0&request=GetFeature&typeNames=' + encodeURIComponent(pick) + '&outputFormat=GEOJSON&srsName=EPSG:4326&bbox=' + box + ',EPSG:4326', 40000);
+      let n = 0, info = '';
+      try { const g = JSON.parse(t); n = (g.features || []).length; info = n ? g.features[0].geometry.type + '，欄位 ' + Object.keys(g.features[0].properties || {}).join(',') : ''; } catch (e) { info = '不是 GeoJSON：' + t.slice(0, 120); }
+      return `${n} 筆、${Math.round(t.length / 1024)} KB、${Date.now() - t0} 毫秒、${info}`;
+    };
+    const a = await tryBox('22.318,114.168,22.326,114.178').catch(e => '失敗：' + e.message);
+    const b = await tryBox('114.168,22.318,114.178,22.326').catch(e => '失敗：' + e.message);
+    return `緯度在前：${a}；經度在前：${b}`;
   }],
   ['行車時間顯示屏（Journeytimev2.xml，網址為推測）', async () => {
     const t = await getText('https://resource.data.one.gov.hk/td/jss/Journeytimev2.xml', 30000);
