@@ -202,9 +202,9 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 .res .leg .arrw small{font-size:10px;font-weight:300;margin-top:1px;letter-spacing:.04em}
 .res .tot{font-size:13px}
 .res .tot b{font-size:22px}
-.flowband{filter:blur(.4px)}
-.flow{stroke-dasharray:2 16;stroke-linecap:round;animation:flowdash 1s linear infinite;filter:drop-shadow(0 0 3px rgba(255,255,255,.9))}
-@keyframes flowdash{to{stroke-dashoffset:-18}}
+.glowwide{filter:blur(5px);animation:breathe 2.6s ease-in-out infinite}
+.glowcore{filter:blur(1.2px)}
+@keyframes breathe{0%,100%{opacity:.5}50%{opacity:.95}}
 .leaflet-tile{outline:1px solid transparent}
 </style>
 </head>
@@ -216,7 +216,7 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 </div>
 <div id="envWarn" class="banner" hidden style="position:fixed;z-index:1300;left:12px;right:12px;top:70px"></div>
 <button type="button" class="fab" id="btnSet" aria-label="設定">⚙</button>
-<div class="brand">飛巴<span class="ver">v13.1</span></div>
+<div class="brand">飛巴<span class="ver">v13.2</span></div>
 <button type="button" class="fab" id="locate" aria-label="回到目前位置">◎</button>
 
 <div id="homeBox">
@@ -1899,25 +1899,33 @@ async function drawRoad(idx, legs, nt, legLines) {
     if (selectedIdx !== idx) return;
     const speeds = await loadSpeeds().catch(() => null);
     if (selectedIdx !== idx) return;
-    legs.forEach((l, k) => {
-      const res = routeLeg(pts[k]);
-      if (res.ok < Math.ceil(res.total * 0.6)) return;          // 貼到道路的段數太少，保留直線
-      const col = LEG_COLORS[k % LEG_COLORS.length];
+    const results = legs.map((l, k) => ({ res: routeLeg(pts[k]), col: LEG_COLORS[k % LEG_COLORS.length], k }));
+    // 基礎路線：每一程只畫一次，固定不變。站與站之間沿最近的道路相連，貼不到的相鄰站保持直線
+    for (const { res, col, k } of results) {
+      if (!res.ok) continue;
       (legLines[k] || []).forEach(x => routeLayer.removeLayer(x));
       L.polyline(res.coords, { color: '#fff', weight: 9, opacity: .95, lineCap: 'round', lineJoin: 'round' }).addTo(routeLayer);
       L.polyline(res.coords, { color: col, weight: 5, opacity: 1, lineCap: 'round', lineJoin: 'round' }).addTo(routeLayer);
-      if (!speeds) return;
+    }
+    // 實時交通：這條路線途經的緩慢（黃）或擠塞（紅）路段，在基礎路線上疊加柔光
+    if (speeds) for (const { res } of results) {
       let run = null;
-      const flush = () => { if (!run) return; L.polyline(run.pts, { color: run.c, weight: 9, opacity: .5, lineCap: 'round', className: 'flowband' }).addTo(routeLayer); L.polyline(run.pts, { color: '#fff', weight: 3, opacity: .95, className: 'flow' }).addTo(routeLayer); run = null; };
+      const flush = () => {
+        if (!run) return;
+        L.polyline(run.pts, { color: run.c, weight: 18, opacity: 1, lineCap: 'round', lineJoin: 'round', className: 'glowwide', interactive: false }).addTo(routeLayer);
+        L.polyline(run.pts, { color: run.c, weight: 7, opacity: .8, lineCap: 'round', lineJoin: 'round', className: 'glowcore', interactive: false }).addTo(routeLayer);
+        run = null;
+      };
       for (const sg of res.segs) {
-        const v = sg.rid == null ? undefined : speeds.get(String(sg.rid)), c = v === undefined ? null : v < JAM_KMH ? '#e5322d' : v < SLOW_KMH ? '#f59e0b' : null;
+        const v = sg.rid == null ? undefined : speeds.get(String(sg.rid)), c = v === undefined ? null : v < JAM_KMH ? '#ff3b30' : v < SLOW_KMH ? '#ffd60a' : null;
         if (c && run && run.c === c) run.pts.push(sg.b); else { flush(); if (c) run = { c, pts: [sg.a, sg.b] }; }
       }
       flush();
-    });
+    }
+    stopDots.forEach(d => d.bringToFront());   // 巴士站圓點保持在最上面
   } catch (e) { /* 失敗就保留直線 */ }
 }
-
+let stopDots = [];
 async function selectResult(idx) {
   const item = current[idx]; if (!item) return;
   const { ev } = item, nt = searchState.net;
@@ -1925,7 +1933,7 @@ async function selectResult(idx) {
   document.querySelectorAll('.res').forEach(e => e.setAttribute('aria-selected', String(+e.dataset.idx === idx)));
   setView('detail');
   const sel = document.querySelector('.res[aria-selected="true"]'); if (sel) sel.scrollIntoView({ block: 'nearest' });
-  routeLayer.clearLayers();
+  routeLayer.clearLayers(); stopDots = [];
   const stopsOf = l => [nt.stops.get(l.r.stops[l.i]), nt.stops.get(l.r.stops[l.j])];
   const pairs = []; let prev = pts.o;
   ev.legs.forEach(l => { const [bs, as] = stopsOf(l); pairs.push([prev, bs]); prev = as; });
@@ -1944,7 +1952,7 @@ async function selectResult(idx) {
     const col = LEG_COLORS[k % LEG_COLORS.length], [bs, as] = stopsOf(l);
     const seg = l.r.stops.slice(l.i, l.j + 1).map(id => { const x = nt.stops.get(id); return [x.lat, x.lng]; });
     legLines.push([L.polyline(seg, { color: '#fff', weight: 9, opacity: .95, lineCap: 'round' }).addTo(routeLayer), L.polyline(seg, { color: col, weight: 5, opacity: 1, lineCap: 'round' }).addTo(routeLayer)]); allPts.push(...seg);
-    seg.forEach(q => L.circleMarker(q, { radius: 4, color: col, weight: 2, fillColor: '#fff', fillOpacity: 1 }).addTo(routeLayer));
+    seg.forEach(q => stopDots.push(L.circleMarker(q, { radius: 4, color: col, weight: 2, fillColor: '#fff', fillOpacity: 1 }).addTo(routeLayer)));
     walk(prev, bs, '#0d1620');
     L.marker([bs.lat, bs.lng], { icon: pinIcon(k === 0 ? 'u' : 'x', k === 0 ? '上' : '轉') }).addTo(routeLayer);
     prev = as;
