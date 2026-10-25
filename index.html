@@ -205,6 +205,7 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 .flowband{filter:blur(.4px)}
 .flow{stroke-dasharray:2 16;stroke-linecap:round;animation:flowdash 1s linear infinite;filter:drop-shadow(0 0 3px rgba(255,255,255,.9))}
 @keyframes flowdash{to{stroke-dashoffset:-18}}
+.leaflet-tile{outline:1px solid transparent}
 </style>
 </head>
 <body data-view="home">
@@ -215,7 +216,7 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 </div>
 <div id="envWarn" class="banner" hidden style="position:fixed;z-index:1300;left:12px;right:12px;top:70px"></div>
 <button type="button" class="fab" id="btnSet" aria-label="設定">⚙</button>
-<div class="brand">飛巴<span class="ver">v13</span></div>
+<div class="brand">飛巴<span class="ver">v13.1</span></div>
 <button type="button" class="fab" id="locate" aria-label="回到目前位置">◎</button>
 
 <div id="homeBox">
@@ -251,6 +252,8 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
     <b>資料測試</b>
     <p class="hint">檢查程式能不能讀到巴士路線和到站資料。按開始測試，完成後按「複製結果」。</p>
     <div class="row"><button class="b primary" id="runDiag" style="width:auto">開始測試</button><button class="b" id="copyDiag">複製結果</button></div>
+    <div class="row" style="margin-top:8px"><button class="b" id="cmpTest">指南針測試</button></div>
+    <div id="cmpBox" hidden style="text-align:center;margin:12px 0"><div id="cmpArrow" style="display:inline-block;width:0;height:0;border-left:22px solid transparent;border-right:22px solid transparent;border-bottom:56px solid #f7c600;transition:transform .18s linear"></div><div id="cmpTxt" class="hint"></div></div>
     <ul class="diag" id="diagList"></ul>
     <textarea id="diagText" hidden readonly aria-label="測試結果文字"></textarea>
   </div>
@@ -1095,8 +1098,11 @@ function setView(v) {
 /* ---------- 導航到上車站：只在按下導航時才持續定位，結束導航或離開就停止（省電） ---------- */
 let navId = null, navLast = 0, navMarker = null, navLine = null, lastBounds = null;
 const arrowIcon = L.divIcon({ className: '', html: '<div class="navarrow" style="width:0;height:0;border-left:11px solid transparent;border-right:11px solid transparent;border-bottom:26px solid #f7c600;filter:drop-shadow(0 0 3px #000);transition:transform .18s linear"></div>', iconSize: [22, 26], iconAnchor: [11, 13] });
-let hSin = 0, hCos = 1, hInit = false, hLast = 0, hShown = null, hCum = 0, gpsMoving = false;
-function setArrow(deg) { const el = navMarker && navMarker.getElement(), a = el && el.querySelector('.navarrow'); if (a) a.style.transform = 'rotate(' + deg + 'deg)'; }
+let hSin = 0, hCos = 1, hInit = false, hLast = 0, hShown = null, hCum = 0, gpsMoving = false, cmpOn = false, cmpTimer = null;
+function setArrow(deg) {
+  const el = navMarker && navMarker.getElement(), a = el && el.querySelector('.navarrow'); if (a) a.style.transform = 'rotate(' + deg + 'deg)';
+  if (cmpOn) { $('#cmpArrow').style.transform = 'rotate(' + deg + 'deg)'; const d = ((deg % 360) + 360) % 360; $('#cmpTxt').textContent = Math.round(d) + '°　' + ['北', '東北', '東', '東南', '南', '西南', '西', '西北'][Math.round(d / 45) % 8] + '（箭咀向上＝手機指向的方向）'; }
+}
 /* 方向：先把角度平滑（用圓周平均，避免 359°→1° 亂跳），每 0.12 秒最多更新一次，變化不足 4° 不動；轉動時沿最短方向轉 */
 function pushHeading(h, w) {
   const r = h * Math.PI / 180;
@@ -1767,9 +1773,9 @@ const RoadNet = (() => {
       for (const ln of lines) for (let i = 1; i < ln.length; i++) addEdge(ln[i - 1], ln[i], pr.ROUTE_ID, +pr.TRAVEL_DIRECTION || 1);
     }
   }
-  function snap(lat, lng, maxM) {
-    const k0 = Math.floor(lat / C), j0 = Math.floor(lng / C), R = Math.ceil(maxM / 55), kx = 111320 * Math.cos(lat * Math.PI / 180), ky = 111320, tried = new Set();
-    let best = null;
+  /* 在 maxM 米內，每個道路編號取最近的一段（雙線分行的兩邊各有自己的編號），再取最近的 k 條 */
+  function snapK(lat, lng, maxM, k) {
+    const k0 = Math.floor(lat / C), j0 = Math.floor(lng / C), R = Math.ceil(maxM / 55), kx = 111320 * Math.cos(lat * Math.PI / 180), ky = 111320, tried = new Set(), byRid = new Map();
     for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
       const g = grid.get((k0 + dy) + ',' + (j0 + dx)); if (!g) continue;
       for (const id of g) {
@@ -1778,19 +1784,20 @@ const RoadNet = (() => {
         const dxs = bx - ax, dys = by - ay, L2 = dxs * dxs + dys * dys;
         let u = L2 ? -(ax * dxs + ay * dys) / L2 : 0; u = Math.max(0, Math.min(1, u));
         const d = Math.hypot(ax + u * dxs, ay + u * dys);
-        if (d <= maxM && (!best || d < best.d)) best = { e, u, d, pt: [e.p[0] + (e.q[0] - e.p[0]) * u, e.p[1] + (e.q[1] - e.p[1]) * u] };
+        if (d > maxM) continue;
+        const cur = byRid.get(e.rid);
+        if (!cur || d < cur.d) byRid.set(e.rid, { e, u, d, pt: [e.p[0] + (e.q[0] - e.p[0]) * u, e.p[1] + (e.q[1] - e.p[1]) * u] });
       }
     }
-    return best;
+    return [...byRid.values()].sort((a, b) => a.d - b.d).slice(0, k);
   }
-  /* 由 P 站到 Q 站沿道路的最短路徑；strict＝遵守單程路方向。找不到或超過 limit 米就傳回 null */
-  function route(P, Q, strict, limit) {
-    const s = snap(P.lat, P.lng, 120), t = snap(Q.lat, Q.lng, 120);
-    if (!s || !t) return null;
-    if (s.e === t.e) {   // 兩個站在同一段道路上：直接沿這段道路走
-      const e = s.e, fwd = t.u >= s.u, len0 = Math.abs(t.u - s.u) * e.w, ll0 = pt => [pt[1], pt[0]];
-      if ((strict && (fwd ? e.dir === 3 : e.dir === 2)) || len0 > limit) return null;
-      return { len: len0, coords: [ll0(s.pt), ll0(t.pt)], segs: [{ rid: e.rid, a: ll0(s.pt), b: ll0(t.pt) }] };
+  const ll = pt => [pt[1], pt[0]];
+  /* 由 s 點到 t 點沿道路的最短路徑；strict＝遵守單程路方向。找不到或超過 limit 米就傳回 null */
+  function routeSnap(s, t, strict, limit) {
+    if (s.e === t.e) {   // 兩點在同一段道路上：直接沿這段道路走（站位稍為「退後」不到 40 米，當作原地前進）
+      const e = s.e, fwd = t.u >= s.u, len0 = Math.abs(t.u - s.u) * e.w;
+      if (len0 > limit || (strict && len0 > 40 && (fwd ? e.dir === 3 : e.dir === 2))) return null;
+      return { len: len0, coords: [ll(s.pt), ll(t.pt)], segs: [{ rid: e.rid, a: ll(s.pt), b: ll(t.pt) }] };
     }
     const dist = new Map(), prev = new Map(), h = new MinHeap(), tgt = new Map();
     const start = (n, c, ok) => { if (strict && !ok) return; if (c < (dist.get(n) ?? Infinity)) { dist.set(n, c); prev.set(n, null); h.push(c, n); } };
@@ -1809,32 +1816,55 @@ const RoadNet = (() => {
         if (nc < limit && nc < (dist.get(x.to) ?? Infinity)) { dist.set(x.to, nc); prev.set(x.to, { from: n, x }); h.push(nc, x.to); }
       }
     }
-    if (bestN === null) return null;
+    if (bestN === null || bestC > limit) return null;
     const chain = []; let n = bestN;
     while (prev.get(n)) { chain.push(prev.get(n)); n = prev.get(n).from; }
     chain.reverse();
-    const root = n, ll = pt => [pt[1], pt[0]], nodePt = (node, e) => (node === e.b ? e.q : e.p);
+    const root = n, nodePt = (node, e) => (node === e.b ? e.q : e.p);
     const coords = [ll(s.pt), ll(nodePt(root, s.e))], segs = [{ rid: s.e.rid, a: ll(s.pt), b: ll(nodePt(root, s.e)) }];
-    for (const { from, x } of chain) {
-      const a = ll(nodePt(from, x.e)), b = ll(nodePt(x.to, x.e));
-      coords.push(b); segs.push({ rid: x.e.rid, a, b });
-    }
+    for (const { from, x } of chain) { const a = ll(nodePt(from, x.e)), b = ll(nodePt(x.to, x.e)); coords.push(b); segs.push({ rid: x.e.rid, a, b }); }
     const last = ll(nodePt(bestN, t.e)), end = ll(t.pt);
     coords.push(end); segs.push({ rid: t.e.rid, a: last, b: end });
     return { len: bestC, coords, segs };
   }
-  return { addFeatures, route, size: () => edges.length };
+  const route = (P, Q, strict, limit) => { const s = snapK(P.lat, P.lng, 120, 1)[0], t = snapK(Q.lat, Q.lng, 120, 1)[0]; return s && t ? routeSnap(s, t, strict, limit) : null; };
+  return { addFeatures, snapK, routeSnap, route, size: () => edges.length };
 })();
-/* 一程巴士的所有相鄰站：能貼到道路的貼路，貼不到的保持直線 */
+/* 一程巴士：每個站先找出最近的幾條道路（例如雙線分行的兩邊），再用「整程總路程最短」選出一致的一邊，
+   避免在兩邊之間來回跳、或繞路。貼不到的相鄰站保持直線。 */
 function routeLeg(P) {
-  const coords = [], segs = []; let ok = 0;
-  for (let i = 1; i < P.length; i++) {
-    const a = P[i - 1], b = P[i], lim = 2.2 * hav(a.lat, a.lng, b.lat, b.lng) + 250;
-    const r = RoadNet.route(a, b, true, lim) || RoadNet.route(a, b, false, lim);
-    if (r) { coords.push(...r.coords); segs.push(...r.segs); ok++; }
-    else { coords.push([a.lat, a.lng], [b.lat, b.lng]); segs.push({ rid: null, a: [a.lat, a.lng], b: [b.lat, b.lng] }); }
+  const n = P.length, K = 3, PEN = 3;
+  const cand = P.map(p => { const c = RoadNet.snapK(p.lat, p.lng, 80, K); return c.length ? c : [null]; });
+  const dp = [cand[0].map(c => ({ cost: c ? c.d * PEN : 400, from: -1, r: null }))];
+  for (let i = 1; i < n; i++) {
+    const a = P[i - 1], b = P[i], st = hav(a.lat, a.lng, b.lat, b.lng), lim = 1.7 * st + 150, fb = 1.8 * st + 400, res = new Map();
+    for (const strict of [true, false]) {
+      for (let ci = 0; ci < cand[i].length; ci++) for (let cj = 0; cj < cand[i - 1].length; cj++) {
+        const s = cand[i - 1][cj], t = cand[i][ci], k = ci + ',' + cj;
+        if (!s || !t || res.has(k)) continue;
+        const r = RoadNet.routeSnap(s, t, strict, lim); if (r) res.set(k, r);
+      }
+      if (res.size) break;
+    }
+    dp.push(cand[i].map((t, ci) => {
+      let best = { cost: Infinity, from: -1, r: null };
+      for (let cj = 0; cj < cand[i - 1].length; cj++) {
+        const r = res.get(ci + ',' + cj), c = dp[i - 1][cj].cost + (t ? t.d * PEN : 400) + (r ? r.len : fb);
+        if (c < best.cost) best = { cost: c, from: cj, r: r || null };
+      }
+      return best;
+    }));
   }
-  return { coords, segs, ok, total: P.length - 1 };
+  let ci = dp[n - 1].reduce((m, x, k, arr) => (x.cost < arr[m].cost ? k : m), 0);
+  const picks = new Array(n);
+  for (let i = n - 1; i >= 0; i--) { picks[i] = dp[i][ci]; ci = picks[i].from; }
+  const coords = [], segs = []; let ok = 0;
+  for (let i = 1; i < n; i++) {
+    const r = picks[i].r;
+    if (r) { coords.push(...r.coords); segs.push(...r.segs); ok++; }
+    else { const a = P[i - 1], b = P[i]; coords.push([a.lat, a.lng], [b.lat, b.lng]); segs.push({ rid: null, a: [a.lat, a.lng], b: [b.lat, b.lng] }); }
+  }
+  return { coords, segs, ok, total: n - 1 };
 }
 const roadTiles = new Map();   // 已載入（或載入中）的小範圍
 async function ensureRoadTiles(legPts) {
@@ -2152,8 +2182,22 @@ async function copyDiag() {
 }
 
 /* ---------- 事件 ---------- */
+function cmpStop() {
+  window.removeEventListener('deviceorientationabsolute', onOrient, true); window.removeEventListener('deviceorientation', onOrient, true);
+  if (absSensor) { try { absSensor.stop(); } catch (e) { /* 忽略 */ } absSensor = null; }
+  clearTimeout(cmpTimer); cmpOn = false; $('#cmpBox').hidden = true; $('#cmpTest').textContent = '指南針測試';
+}
+function cmpStart() {
+  hInit = false; hShown = null; hCum = 0; gotAbs = false; gpsMoving = false; cmpOn = true;
+  $('#cmpBox').hidden = false; $('#cmpTest').textContent = '停止指南針測試'; $('#cmpTxt').textContent = '等待方向數據…';
+  try { if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) DeviceOrientationEvent.requestPermission().catch(() => {}); } catch (e) { /* iPhone 才需要 */ }
+  window.addEventListener('deviceorientationabsolute', onOrient, true); window.addEventListener('deviceorientation', onOrient, true);
+  setTimeout(() => { if (cmpOn && !gotAbs) startAbsSensor(); }, 1500);
+  cmpTimer = setTimeout(cmpStop, 90000);
+}
+$('#cmpTest').onclick = () => { if (cmpOn) cmpStop(); else cmpStart(); };
 $('#btnSet').onclick = () => { $('#settings').hidden = false; };
-$('#setClose').onclick = () => { $('#settings').hidden = true; };
+$('#setClose').onclick = () => { cmpStop(); $('#settings').hidden = true; };
 $('#locate').onclick = async () => {
   if (navMarker) { map.setView(navMarker.getLatLng(), Math.max(map.getZoom(), 16)); return; }
   try { const p = await getPos(); map.setView([p.coords.latitude, p.coords.longitude], 16); }
