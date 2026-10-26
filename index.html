@@ -218,7 +218,7 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 </div>
 <div id="envWarn" class="banner" hidden style="position:fixed;z-index:1300;left:12px;right:12px;top:70px"></div>
 <button type="button" class="fab" id="btnSet" aria-label="設定">⚙</button>
-<div class="brand">飛巴<span class="ver">v13.4</span></div>
+<div class="brand">飛巴<span class="ver">v14</span></div>
 <button type="button" class="fab" id="locate" aria-label="回到目前位置">◎</button>
 
 <div id="homeBox">
@@ -1756,7 +1756,7 @@ class MinHeap {
   pop() { const a = this.a, top = a[0], last = a.pop(); if (a.length) { a[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < a.length && a[l][0] < a[m][0]) m = l; if (r < a.length && a[r][0] < a[m][0]) m = r; if (m === i) break; [a[m], a[i]] = [a[i], a[m]]; i = m; } } return top; }
 }
 const RoadNet = (() => {
-  const adj = new Map(), edges = [], grid = new Map(), seen = new Set(), C = 0.0005;
+  const adj = new Map(), edges = [], grid = new Map(), seen = new Set(), ridGeo = new Map(), C = 0.0005;
   const key = (lng, lat) => Math.round(lng * 1e5) + ',' + Math.round(lat * 1e5);
   const cell = (lng, lat) => Math.floor(lat / C) + ',' + Math.floor(lng / C);
   const link = (a, b, w, e, ok) => { let l = adj.get(a); if (!l) adj.set(a, l = []); l.push({ to: b, w, e, ok }); };
@@ -1772,8 +1772,31 @@ const RoadNet = (() => {
       const pr = f.properties || {}, id = f.id || pr.OBJECTID; if (seen.has(id)) continue; seen.add(id);
       const g = f.geometry; if (!g) continue;
       const lines = g.type === 'MultiLineString' ? g.coordinates : g.type === 'LineString' ? [g.coordinates] : [];
+      if (pr.ROUTE_ID != null && lines.length) ridGeo.set(pr.ROUTE_ID, lines.flat());
       for (const ln of lines) for (let i = 1; i < ln.length; i++) addEdge(ln[i - 1], ln[i], pr.ROUTE_ID, +pr.TRAVEL_DIRECTION || 1);
     }
+  }
+  /* 政府駕駛路線服務傳回「起點位置、終點位置、經過的道路編號」，用道路編號把中線接成一條路線。缺少某個編號的形狀就傳回 {missing:true} */
+  function assemble(j) {
+    const rt = j && j.route && j.route[0]; if (!rt) return null;
+    const rids = (rt.segment || []).flatMap(x => x.rid || []);
+    if (!rids.length) return null;
+    const pieces = [];
+    for (const id of rids) { const g = ridGeo.get(id); if (!g) return { missing: true }; pieces.push(g.slice()); }
+    const d2 = (p, q) => (p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2;
+    const sp = rt.start && rt.start.intersect ? [rt.start.intersect[1], rt.start.intersect[0]] : null, ep = rt.end && rt.end.intersect ? [rt.end.intersect[1], rt.end.intersect[0]] : null;
+    if (pieces.length > 1) {   // 第一段的方向：讓它的終點靠近第二段
+      const a = pieces[0], b = pieces[1], e = [d2(a[0], b[0]), d2(a[0], b[b.length - 1]), d2(a[a.length - 1], b[0]), d2(a[a.length - 1], b[b.length - 1])];
+      if (e.indexOf(Math.min(...e)) < 2) a.reverse();
+    } else if (sp && d2(pieces[0][0], sp) > d2(pieces[0][pieces[0].length - 1], sp)) pieces[0].reverse();
+    for (let i = 1; i < pieces.length; i++) { const end = pieces[i - 1][pieces[i - 1].length - 1], cur = pieces[i]; if (d2(end, cur[0]) > d2(end, cur[cur.length - 1])) cur.reverse(); }
+    const segIdx = (arr, pt) => { let bi = 0, bd = Infinity; for (let i = 0; i + 1 < arr.length; i++) { const ax = arr[i][0], ay = arr[i][1], dx = arr[i + 1][0] - ax, dy = arr[i + 1][1] - ay, L2 = dx * dx + dy * dy; let u = L2 ? ((pt[0] - ax) * dx + (pt[1] - ay) * dy) / L2 : 0; u = Math.max(0, Math.min(1, u)); const d = d2([ax + u * dx, ay + u * dy], pt); if (d < bd) { bd = d; bi = i; } } return bi; };
+    const n = pieces.length;
+    if (sp) pieces[0] = [sp, ...pieces[0].slice(segIdx(pieces[0], sp) + 1)];
+    if (ep) { const l = pieces[n - 1], m = segIdx(l, ep); pieces[n - 1] = [...l.slice(0, m + 1), ep]; }
+    const coords = [], segs = [];
+    pieces.forEach((pc, i) => { for (let k = 0; k < pc.length; k++) { coords.push([pc[k][1], pc[k][0]]); if (k) segs.push({ rid: rids[i], a: [pc[k - 1][1], pc[k - 1][0]], b: [pc[k][1], pc[k][0]] }); } });
+    return { coords, segs };
   }
   /* 在 maxM 米內，每個道路編號取最近的一段（雙線分行的兩邊各有自己的編號），再取最近的 k 條 */
   function snapK(lat, lng, maxM, k) {
@@ -1830,7 +1853,7 @@ const RoadNet = (() => {
     return { len: bestC, coords, segs };
   }
   const route = (P, Q, strict, limit) => { const s = snapK(P.lat, P.lng, 120, 1)[0], t = snapK(Q.lat, Q.lng, 120, 1)[0]; return s && t ? routeSnap(s, t, strict, limit) : null; };
-  return { addFeatures, snapK, routeSnap, route, size: () => edges.length };
+  return { addFeatures, snapK, routeSnap, route, assemble, size: () => edges.length };
 })();
 /* 一程巴士：每個站先找出最近的幾條道路（例如雙線分行的兩邊），再用「整程總路程最短」選出一致的一邊，
    避免在兩邊之間來回跳、或繞路。貼不到的相鄰站保持直線。 */
@@ -1868,6 +1891,42 @@ function routeLeg(P) {
   }
   return { coords, segs, ok, total: n - 1 };
 }
+/* ---------- 政府駕駛路線服務（運輸署 TDAS，出行易駕駛路線的同一個來源） ---------- */
+const TDAS_URL = 'https://tdas-api.hkemobility.gov.hk/tdas/api/route';
+const tdasCache = new Map(); let tdasDead = 0, tdasOk = 0;
+async function tdasPair(a, b) {
+  const key = [a.lat, a.lng, b.lat, b.lng].map(v => v.toFixed(5)).join(',');
+  if (tdasCache.has(key)) return tdasCache.get(key);
+  if (tdasDead >= 4 && !tdasOk) return null;     // 服務連續失敗就不再試
+  try {
+    const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 12000);
+    const r = await fetch(TDAS_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ start: { lat: a.lat, long: a.lng }, end: { lat: b.lat, long: b.lng }, lang: 'en', type: 'ST' }), signal: ctl.signal });
+    clearTimeout(to);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json(); tdasOk++;
+    let out = RoadNet.assemble(j);
+    if (out && out.missing) {   // 路線繞出了已載入的範圍：把站旁邊一圈的道路也載入，再試一次
+      const ex = [a, b].flatMap(p => [[0, 0], [.011, 0], [-.011, 0], [0, .011], [0, -.011]].map(([dy, dx]) => ({ lat: p.lat + dy, lng: p.lng + dx })));
+      await ensureRoadTiles([ex]);
+      out = RoadNet.assemble(j);
+      if (out && out.missing) out = null;
+    }
+    tdasCache.set(key, out || null);
+    return out || null;
+  } catch (e) { tdasDead++; return null; }
+}
+/* 一程巴士：每一對相鄰站向政府駕駛路線服務要一條路線（同時最多 5 個請求）；要不到的相鄰站保持直線 */
+async function routeLegTdas(P) {
+  const out = new Array(P.length - 1).fill(null);
+  await pool(out.map((_, i) => i), 5, async i => { out[i] = await tdasPair(P[i], P[i + 1]); });
+  const coords = [], segs = []; let ok = 0;
+  for (let i = 0; i < out.length; i++) {
+    const r = out[i];
+    if (r) { coords.push(...r.coords); segs.push(...r.segs); ok++; }
+    else { const a = P[i], b = P[i + 1]; coords.push([a.lat, a.lng], [b.lat, b.lng]); segs.push({ rid: null, a: [a.lat, a.lng], b: [b.lat, b.lng] }); }
+  }
+  return { coords, segs, ok, total: out.length };
+}
 const roadTiles = new Map();   // 已載入（或載入中）的小範圍
 async function ensureRoadTiles(legPts) {
   const T = 0.01, need = new Map();
@@ -1878,11 +1937,12 @@ async function ensureRoadTiles(legPts) {
   }
   const pad = 0.0012;
   await pool([...need.entries()], 6, async ([k, [ty, tx]]) => {
+    roadTiles.set(k, false);
     try {
       const box = [ty * T - pad, tx * T - pad, (ty + 1) * T + pad, (tx + 1) * T + pad].join(',');
       const g = await getJSON(WFS_URL + '?service=WFS&version=2.0.0&request=GetFeature&typeNames=csdi:CENTERLINE&outputFormat=GEOJSON&srsName=EPSG:4326&bbox=' + box + ',EPSG:4326', 40000, 1);
       RoadNet.addFeatures(g); roadTiles.set(k, true);
-    } catch (e) { /* 這一格載入失敗：該段維持直線 */ }
+    } catch (e) { roadTiles.delete(k); /* 這一格載入失敗：之後可以再試 */ }
   });
 }
 let speedMap = null, speedAt = 0;
@@ -1901,7 +1961,14 @@ async function drawRoad(idx, legs, nt, legLines) {
     if (selectedIdx !== idx) return;
     const speeds = await loadSpeeds().catch(() => null);
     if (selectedIdx !== idx) return;
-    const results = legs.map((l, k) => { const res = routeLeg(pts[k]); res.coords = despur(res.coords); return { res, col: LEG_COLORS[k % LEG_COLORS.length], k }; });
+    const results = [];
+    for (let k = 0; k < legs.length; k++) {
+      let res = await routeLegTdas(pts[k]);                                  // 1. 政府駕駛路線服務
+      if (res.ok < Math.ceil(res.total * 0.5)) res = routeLeg(pts[k]);       // 2. 要不到：用道路中線自己計算
+      res.coords = despur(res.coords);
+      results.push({ res, col: LEG_COLORS[k % LEG_COLORS.length], k });
+      if (selectedIdx !== idx) return;
+    }
     // 實時交通：這條路線途經的緩慢（黃）或擠塞（紅）路段，先畫在最底層，當作基礎路線四周的柔光
     if (speeds) for (const { res } of results) {
       let run = null;
