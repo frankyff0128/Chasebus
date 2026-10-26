@@ -218,7 +218,7 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 </div>
 <div id="envWarn" class="banner" hidden style="position:fixed;z-index:1300;left:12px;right:12px;top:70px"></div>
 <button type="button" class="fab" id="btnSet" aria-label="設定">⚙</button>
-<div class="brand">飛巴<span class="ver">v14</span></div>
+<div class="brand">飛巴<span class="ver">v14.1</span></div>
 <button type="button" class="fab" id="locate" aria-label="回到目前位置">◎</button>
 
 <div id="homeBox">
@@ -1915,17 +1915,38 @@ async function tdasPair(a, b) {
     return out || null;
   } catch (e) { tdasDead++; return null; }
 }
-/* 一程巴士：每一對相鄰站向政府駕駛路線服務要一條路線（同時最多 5 個請求）；要不到的相鄰站保持直線 */
-async function routeLegTdas(P) {
-  const out = new Array(P.length - 1).fill(null);
-  await pool(out.map((_, i) => i), 5, async i => { out[i] = await tdasPair(P[i], P[i + 1]); });
-  const coords = [], segs = []; let ok = 0;
-  for (let i = 0; i < out.length; i++) {
-    const r = out[i];
-    if (r) { coords.push(...r.coords); segs.push(...r.segs); ok++; }
-    else { const a = P[i], b = P[i + 1]; coords.push([a.lat, a.lng], [b.lat, b.lng]); segs.push({ rid: null, a: [a.lat, a.lng], b: [b.lat, b.lng] }); }
+function distToPolyline(p, coords) {
+  const kx = 111320 * Math.cos(p.lat * Math.PI / 180), ky = 111320; let best = Infinity;
+  for (let i = 1; i < coords.length; i++) {
+    const ax = (coords[i - 1][1] - p.lng) * kx, ay = (coords[i - 1][0] - p.lat) * ky, bx = (coords[i][1] - p.lng) * kx, by = (coords[i][0] - p.lat) * ky;
+    const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy; let u = L2 ? -(ax * dx + ay * dy) / L2 : 0; u = Math.max(0, Math.min(1, u));
+    best = Math.min(best, Math.hypot(ax + u * dx, ay + u * dy));
   }
-  return { coords, segs, ok, total: out.length };
+  return best;
+}
+/* 第 i 站到第 j 站要一條路線；中途的站如果離路線超過 60 米，代表巴士沒走這條路，就拆開成兩半再要 */
+async function tdasSpan(P, i, j, spans) {
+  let r = await tdasPair(P[i], P[j]);
+  if (r && j - i > 1) for (let m = i + 1; m < j; m++) if (distToPolyline(P[m], r.coords) > 60) { r = null; break; }
+  if (r) { spans.push({ i, j, r }); return; }
+  if (j - i <= 1) return;
+  const m = (i + j) >> 1;
+  await tdasSpan(P, i, m, spans); await tdasSpan(P, m, j, spans);
+}
+/* 一程巴士：每 4 個站向政府駕駛路線服務要一條路線（同時最多 4 個請求），要不到的相鄰站保持直線 */
+async function routeLegTdas(P) {
+  const n = P.length, spans = [], chunks = [];
+  for (let i = 0; i < n - 1; i += 4) chunks.push([i, Math.min(i + 4, n - 1)]);
+  await pool(chunks, 4, ([i, j]) => tdasSpan(P, i, j, spans));
+  spans.sort((a, b) => a.i - b.i);
+  const coords = [], segs = []; let ok = 0, pos = 0;
+  const straight = (a, b) => { coords.push([a.lat, a.lng], [b.lat, b.lng]); segs.push({ rid: null, a: [a.lat, a.lng], b: [b.lat, b.lng] }); };
+  for (const sp of spans) {
+    for (; pos < sp.i; pos++) straight(P[pos], P[pos + 1]);
+    coords.push(...sp.r.coords); segs.push(...sp.r.segs); ok += sp.j - sp.i; pos = sp.j;
+  }
+  for (; pos < n - 1; pos++) straight(P[pos], P[pos + 1]);
+  return { coords, segs, ok, total: n - 1 };
 }
 const roadTiles = new Map();   // 已載入（或載入中）的小範圍
 async function ensureRoadTiles(legPts) {
@@ -1963,8 +1984,9 @@ async function drawRoad(idx, legs, nt, legLines) {
     if (selectedIdx !== idx) return;
     const results = [];
     for (let k = 0; k < legs.length; k++) {
-      let res = await routeLegTdas(pts[k]);                                  // 1. 政府駕駛路線服務
-      if (res.ok < Math.ceil(res.total * 0.5)) res = routeLeg(pts[k]);       // 2. 要不到：用道路中線自己計算
+      let res = await routeLegTdas(pts[k]), src = '政府駕駛路線';             // 1. 政府駕駛路線服務
+      if (res.ok < Math.ceil(res.total * 0.5)) { res = routeLeg(pts[k]); src = res.ok ? '自行計算' : '直線'; }   // 2. 要不到：用道路中線自己計算
+      setStatus(`第 ${k + 1} 程路線來源：${src}（貼路 ${res.ok}／${res.total}；政府服務累計成功 ${tdasOk} 次、失敗 ${tdasDead} 次）`);
       res.coords = despur(res.coords);
       results.push({ res, col: LEG_COLORS[k % LEG_COLORS.length], k });
       if (selectedIdx !== idx) return;
@@ -2077,7 +2099,14 @@ const wfsLayer = async () => {
 const tests = [
   ['政府駕駛路線服務（運輸署 TDAS，出行易駕駛路線同一個來源）', async () => {
     const t0 = Date.now();
-    const r = await fetch('https://tdas-api.hkemobility.gov.hk/tdas/api/route', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ start: { lat: 22.3193, long: 114.1694 }, end: { lat: 22.3236, long: 114.1695 }, lang: 'en', type: 'ST' }) });
+    let r;
+    try { r = await fetch('https://tdas-api.hkemobility.gov.hk/tdas/api/route', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ start: { lat: 22.3193, long: 114.1694 }, end: { lat: 22.3236, long: 114.1695 }, lang: 'en', type: 'ST' }) }); }
+    catch (e) {
+      let probe;
+      try { await fetch('https://tdas-api.hkemobility.gov.hk/tdas/api/route', { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body: '{}' }); probe = '伺服器連得上，但瀏覽器不讓網頁讀取回應（伺服器暫時回傳錯誤、限制請求次數，或跨網站設定改變）'; }
+      catch (e2) { probe = '連伺服器都連不上（網絡、防火牆、VPN 或伺服器暫停）'; }
+      throw new Error('Failed to fetch；診斷：' + probe);
+    }
     if (!r.ok) throw new Error('伺服器回應 ' + r.status);
     const j = await r.json(), ms = Date.now() - t0;
     const seg = (j.route && j.route[0] && j.route[0].segment) || [], rids = seg.flatMap(x => x.rid || []);
