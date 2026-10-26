@@ -202,10 +202,12 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 .res .leg .arrw small{font-size:10px;font-weight:300;margin-top:1px;letter-spacing:.04em}
 .res .tot{font-size:13px}
 .res .tot b{font-size:22px}
-.glowwide{filter:blur(5px);animation:breathe 2.6s ease-in-out infinite}
-.glowcore{filter:blur(1.2px)}
-@keyframes breathe{0%,100%{opacity:.5}50%{opacity:.95}}
+.glowwide{filter:blur(6px);animation:breathe 2.6s ease-in-out infinite}
+@keyframes breathe{0%,100%{opacity:.45}50%{opacity:.8}}
 .leaflet-tile{outline:1px solid transparent}
+.grp{display:inline-block;font-size:13px;font-weight:700;letter-spacing:.3em;padding:5px 14px 5px 16px;border-radius:999px;margin:16px 4px 8px}
+.grp.g-d{background:rgba(39,211,176,.18);color:#7ff0d8;border:1px solid rgba(39,211,176,.5)}
+.grp.g-t{background:rgba(74,168,255,.18);color:#9cd0ff;border:1px solid rgba(74,168,255,.5)}
 </style>
 </head>
 <body data-view="home">
@@ -216,7 +218,7 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 </div>
 <div id="envWarn" class="banner" hidden style="position:fixed;z-index:1300;left:12px;right:12px;top:70px"></div>
 <button type="button" class="fab" id="btnSet" aria-label="設定">⚙</button>
-<div class="brand">飛巴<span class="ver">v13.2</span></div>
+<div class="brand">飛巴<span class="ver">v13.3</span></div>
 <button type="button" class="fab" id="locate" aria-label="回到目前位置">◎</button>
 
 <div id="homeBox">
@@ -1158,7 +1160,7 @@ function navStop() {
   if (absSensor) { try { absSensor.stop(); } catch (e) { /* 忽略 */ } absSensor = null; }
   window.removeEventListener('deviceorientationabsolute', onOrient, true); window.removeEventListener('deviceorientation', onOrient, true);
   if (navMarker) { map.removeLayer(navMarker); navMarker = null; }
-  if (navLine) { map.removeLayer(navLine); navLine = null; }
+  if (navLine) { navLine.forEach(x => map.removeLayer(x)); navLine = null; }
   const ni = $('#navInfo'); if (ni) ni.hidden = true;
 }
 /* 地圖全屏時自動開啟定位（黃色三角形箭咀指示方向），離開全屏就關閉 */
@@ -1183,7 +1185,7 @@ function navStart() {
     await pedRoute(me, bs);
     if (navId === null) return;
     const key = pedKey(me, bs), len = pedCache.get(key) ?? d * DETOUR, path = pedPath.get(key) || [[me.lat, me.lng], [bs.lat, bs.lng]];
-    if (navLine) navLine.setLatLngs(path); else navLine = L.polyline(path, { color: '#0aa58a', weight: 5, opacity: .95 }).addTo(map);
+    if (navLine) navLine.forEach(x => x.setLatLngs(path)); else navLine = [L.polyline(path, { color: '#fff', weight: 10, opacity: .9, lineCap: 'round', lineJoin: 'round', interactive: false }).addTo(map), L.polyline(path, { color: '#1d4ed8', weight: 5, opacity: 1, dashArray: '1 10', lineCap: 'round', lineJoin: 'round', interactive: false }).addTo(map)]; // 走路用藍色點線，和巴士路線分開
   }, e => { toast('未能取得位置（' + (e.code === 1 ? '你沒有允許定位' : '定位失敗') + '）'); navStop(); }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
 }
 function refreshGo() {
@@ -1724,7 +1726,7 @@ function renderResults() {
         `<div class="sub leg">${rtBadge(l.r, k)}<span class="tstop">${esc(bs.name)}</span><span class="arrw">→<small>${l.nStops} 站</small></span><span class="${k < ev.legs.length - 1 ? 'tstop' : 'stp'}">${esc(as.name)}</span></div>`;
     }).join('') + ((alts && alts.length) ? `<div class="sub alts"><b>也可乘</b>${alts.map((a, ai) => '<div>' + a.ev.legs.map((l, kk) => { const w = Math.max(0, Math.round(l.wait / 60000)); return rtBadge(l.r, kk, ai) + ' <span class="wt ' + (w < 5 ? 'y' : 'g') + '">' + w + ' 分</span>' + (l.board.rmk && l.board.rmk.indexOf('原定') >= 0 ? '（原定班次）' : ''); }).join(' → ') + '，約 ' + Math.max(1, Math.round(a.ev.totalSec / 60)) + ' 分鐘</div>').join('')}</div>` : '');
     return `<div class="res" role="button" tabindex="0" data-idx="${idx}" aria-selected="${idx === selectedIdx}">
-      <div class="top"><div class="tot">約 <b>${mins}</b> 分鐘${ev.transfers ? (tag ? '' : `<span class="tag">轉${ev.transfers}次車</span>`) : '<span class="tag">直達</span>'}${tag ? `<span class="tag good${ev.transfers ? ' sm' : ''}">${esc(tag)}</span>` : ''}${ev.est ? '<span class="tag warn">含估算</span>' : ''}</div>
+      <div class="top"><div class="tot">約 <b>${mins}</b> 分鐘${ev.transfers ? (tag ? '' : `<span class="tag">轉${ev.transfers}次車</span>`) : ''}${tag ? `<span class="tag good${ev.transfers ? ' sm' : ''}">${esc(tag)}</span>` : ''}${ev.est ? '<span class="tag warn">含估算</span>' : ''}</div>
       <div class="fare">${fareTxt(ev, plan)}</div><div class="nx">下一班 ${etaPill(first.nextMin)}${first.next2Min != null ? ' <span class="nx2">再下一班 ' + minTxt(first.next2Min) + '</span>' : ''}</div></div>
       <div class="line">${flow}</div>${detail}</div>`;
   };
@@ -1733,8 +1735,8 @@ function renderResults() {
   const rest = (nDirect - shownD) + ((current.length - nDirect) - shownT);
   box.innerHTML =
     (!current.length ? '<div class="grp">沒有找到合適的方案，可以放寬搜索範圍再試。</div>' : '') +
-    (nDirect ? `<div class="grp">直達</div>` + dHtml : '') +
-    (current.length > nDirect ? `<div class="grp">轉乘</div>` + tHtml : '') +
+    (nDirect ? `<div class="grp g-d">直達</div>` + dHtml : '') +
+    (current.length > nDirect ? `<div class="grp g-t">轉乘</div>` + tHtml : '') +
     (rest > 0 ? `<button class="b" id="more" style="width:100%">顯示更多（還有 ${rest} 個）</button>` : '') +
     `<details class="dbg"><summary>除錯檢查</summary><div>起終點附近靜態找到 ${directReport.length} 個直達方案</div>${statusLog.slice(-14).map(x => '<div>' + esc(x) + '</div>').join('')}<div>${esc(chaseInfo)}</div>${dbgPlans.map(x => '<div>' + esc(x) + '</div>').join('')}${directReport.length ? directReport.map(x => '<div>' + esc(x) + '</div>').join('') : '<div>找不到任何直達路線：起點和終點附近沒有同一條路線經過。</div>'}</details>`;
   const more = $('#more');
@@ -1899,21 +1901,13 @@ async function drawRoad(idx, legs, nt, legLines) {
     if (selectedIdx !== idx) return;
     const speeds = await loadSpeeds().catch(() => null);
     if (selectedIdx !== idx) return;
-    const results = legs.map((l, k) => ({ res: routeLeg(pts[k]), col: LEG_COLORS[k % LEG_COLORS.length], k }));
-    // 基礎路線：每一程只畫一次，固定不變。站與站之間沿最近的道路相連，貼不到的相鄰站保持直線
-    for (const { res, col, k } of results) {
-      if (!res.ok) continue;
-      (legLines[k] || []).forEach(x => routeLayer.removeLayer(x));
-      L.polyline(res.coords, { color: '#fff', weight: 9, opacity: .95, lineCap: 'round', lineJoin: 'round' }).addTo(routeLayer);
-      L.polyline(res.coords, { color: col, weight: 5, opacity: 1, lineCap: 'round', lineJoin: 'round' }).addTo(routeLayer);
-    }
-    // 實時交通：這條路線途經的緩慢（黃）或擠塞（紅）路段，在基礎路線上疊加柔光
+    const results = legs.map((l, k) => { const res = routeLeg(pts[k]); res.coords = despur(res.coords); return { res, col: LEG_COLORS[k % LEG_COLORS.length], k }; });
+    // 實時交通：這條路線途經的緩慢（黃）或擠塞（紅）路段，先畫在最底層，當作基礎路線四周的柔光
     if (speeds) for (const { res } of results) {
       let run = null;
       const flush = () => {
         if (!run) return;
-        L.polyline(run.pts, { color: run.c, weight: 18, opacity: 1, lineCap: 'round', lineJoin: 'round', className: 'glowwide', interactive: false }).addTo(routeLayer);
-        L.polyline(run.pts, { color: run.c, weight: 7, opacity: .8, lineCap: 'round', lineJoin: 'round', className: 'glowcore', interactive: false }).addTo(routeLayer);
+        L.polyline(run.pts, { color: run.c, weight: 26, opacity: 1, lineCap: 'round', lineJoin: 'round', className: 'glowwide', interactive: false }).addTo(routeLayer);
         run = null;
       };
       for (const sg of res.segs) {
@@ -1922,10 +1916,32 @@ async function drawRoad(idx, legs, nt, legLines) {
       }
       flush();
     }
+    // 基礎路線：每一程只畫一次，固定不變，疊在柔光上面
+    for (const { res, col, k } of results) {
+      if (!res.ok) continue;
+      (legLines[k] || []).forEach(x => routeLayer.removeLayer(x));
+      L.polyline(res.coords, { color: '#fff', weight: 9, opacity: .95, lineCap: 'round', lineJoin: 'round' }).addTo(routeLayer);
+      L.polyline(res.coords, { color: col, weight: 5, opacity: 1, lineCap: 'round', lineJoin: 'round' }).addTo(routeLayer);
+    }
     stopDots.forEach(d => d.bringToFront());   // 巴士站圓點保持在最上面
   } catch (e) { /* 失敗就保留直線 */ }
 }
 let stopDots = [];
+/* 清除近乎原路折返的小尖角（例如貼到站位時多走一小段再回頭） */
+function despur(c) {
+  let pts = c.slice();
+  for (let pass = 0; pass < 4; pass++) {
+    let changed = false; const out = [pts[0]];
+    for (let i = 1; i < pts.length - 1; i++) {
+      const a = out[out.length - 1], b = pts[i], d = pts[i + 1];
+      const x1 = b[1] - a[1], y1 = b[0] - a[0], x2 = d[1] - b[1], y2 = d[0] - b[0], l1 = Math.hypot(x1, y1), l2 = Math.hypot(x2, y2);
+      if (l1 > 0 && l2 > 0 && (x1 * x2 + y1 * y2) / (l1 * l2) < -0.94 && Math.min(l1, l2) * 111320 < 60) { changed = true; continue; }
+      out.push(b);
+    }
+    out.push(pts[pts.length - 1]); pts = out; if (!changed) break;
+  }
+  return pts;
+}
 async function selectResult(idx) {
   const item = current[idx]; if (!item) return;
   const { ev } = item, nt = searchState.net;
@@ -1952,7 +1968,7 @@ async function selectResult(idx) {
     const col = LEG_COLORS[k % LEG_COLORS.length], [bs, as] = stopsOf(l);
     const seg = l.r.stops.slice(l.i, l.j + 1).map(id => { const x = nt.stops.get(id); return [x.lat, x.lng]; });
     legLines.push([L.polyline(seg, { color: '#fff', weight: 9, opacity: .95, lineCap: 'round' }).addTo(routeLayer), L.polyline(seg, { color: col, weight: 5, opacity: 1, lineCap: 'round' }).addTo(routeLayer)]); allPts.push(...seg);
-    seg.forEach(q => stopDots.push(L.circleMarker(q, { radius: 4, color: col, weight: 2, fillColor: '#fff', fillOpacity: 1 }).addTo(routeLayer)));
+    seg.forEach(q => stopDots.push(L.circleMarker(q, { radius: 5, color: '#0d1620', weight: 2.5, fillColor: '#fff', fillOpacity: 1 }).addTo(routeLayer)));
     walk(prev, bs, '#0d1620');
     L.marker([bs.lat, bs.lng], { icon: pinIcon(k === 0 ? 'u' : 'x', k === 0 ? '上' : '轉') }).addTo(routeLayer);
     prev = as;
