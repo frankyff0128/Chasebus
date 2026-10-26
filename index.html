@@ -218,7 +218,7 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 </div>
 <div id="envWarn" class="banner" hidden style="position:fixed;z-index:1300;left:12px;right:12px;top:70px"></div>
 <button type="button" class="fab" id="btnSet" aria-label="設定">⚙</button>
-<div class="brand">飛巴<span class="ver">v13.3</span></div>
+<div class="brand">飛巴<span class="ver">v13.4</span></div>
 <button type="button" class="fab" id="locate" aria-label="回到目前位置">◎</button>
 
 <div id="homeBox">
@@ -2008,6 +2008,23 @@ const wfsLayer = async () => {
   return { names, pick: names.find(n => /center|centre|rcl/i.test(n)) || names[0] };
 };
 const tests = [
+  ['政府駕駛路線服務（運輸署 TDAS，出行易駕駛路線同一個來源）', async () => {
+    const t0 = Date.now();
+    const r = await fetch('https://tdas-api.hkemobility.gov.hk/tdas/api/route', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ start: { lat: 22.3193, long: 114.1694 }, end: { lat: 22.3236, long: 114.1695 }, lang: 'en', type: 'ST' }) });
+    if (!r.ok) throw new Error('伺服器回應 ' + r.status);
+    const j = await r.json(), ms = Date.now() - t0;
+    const seg = (j.route && j.route[0] && j.route[0].segment) || [], rids = seg.flatMap(x => x.rid || []);
+    let wfs = '';
+    try {
+      const ids = [...new Set(rids)].slice(0, 6);
+      const one = id => `<fes:PropertyIsEqualTo><fes:ValueReference>ROUTE_ID</fes:ValueReference><fes:Literal>${id}</fes:Literal></fes:PropertyIsEqualTo>`;
+      const f = '<fes:Filter xmlns:fes="http://www.opengis.net/fes/2.0">' + (ids.length > 1 ? '<fes:Or>' + ids.map(one).join('') + '</fes:Or>' : one(ids[0])) + '</fes:Filter>';
+      const g = await getJSON(WFS + '?service=WFS&version=2.0.0&request=GetFeature&typeNames=csdi:CENTERLINE&outputFormat=GEOJSON&srsName=EPSG:4326&filter=' + encodeURIComponent(f), 30000, 1);
+      const got = new Set((g.features || []).map(x => x.properties && x.properties.ROUTE_ID));
+      wfs = `；用道路編號向道路中線查位置：要 ${ids.length} 個，取回 ${got.size} 個（${(g.features || []).length} 筆）`;
+    } catch (e) { wfs = '；用道路編號查位置失敗：' + e.message; }
+    return `用時 ${ms} 毫秒；距離 ${j.distU}；時間 ${j.eta}；平均車速 ${j.jSpeed}；路段組 ${seg.length}、道路編號 ${rids.length} 個；前 3 組：${JSON.stringify(seg.slice(0, 3)).slice(0, 220)}；欄位：${Object.keys(j).join(',')}${wfs}`;
+  }],
   ['道路車速（irnAvgSpeed-all.xml，每 2 分鐘更新）', async () => {
     const t = await getText('https://resource.data.one.gov.hk/td/traffic-detectors/irnAvgSpeed-all.xml', 30000);
     const d = new DOMParser().parseFromString(t, 'text/xml');
