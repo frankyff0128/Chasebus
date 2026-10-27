@@ -218,7 +218,7 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 </div>
 <div id="envWarn" class="banner" hidden style="position:fixed;z-index:1300;left:12px;right:12px;top:70px"></div>
 <button type="button" class="fab" id="btnSet" aria-label="設定">⚙</button>
-<div class="brand">飛巴<span class="ver">v14.1</span></div>
+<div class="brand">飛巴<span class="ver">v14.2</span></div>
 <button type="button" class="fab" id="locate" aria-label="回到目前位置">◎</button>
 
 <div id="homeBox">
@@ -1347,7 +1347,7 @@ function onType(which) {
 }
 
 /* ---------- 搜索 ---------- */
-let dbgPlans = []; let chaseInfo = ''; let directReport = []; let current = []; let nDirect = 0, shownD = 0, shownT = 0; let selectedIdx = -1; let searchState = null;
+let dbgPlans = []; let tmLog = []; let chaseInfo = ''; let directReport = []; let current = []; let nDirect = 0, shownD = 0, shownT = 0; let selectedIdx = -1; let searchState = null;
 const LEG_COLORS = ['#0aa58a', '#2f7de1', '#8b5cf6', '#e8890c'];
 
 async function pool(items, n, fn, onDone) {
@@ -1366,6 +1366,7 @@ async function fetchEta(key, store) {
 
 async function runSearch() {
   const go = $('#go'); go.disabled = true; openBox(); progStart();
+  const T0 = performance.now(); tmLog = []; const tm = l => tmLog.push(l + '：' + ((performance.now() - T0) / 1000).toFixed(1) + ' 秒');
   $('#results').innerHTML = ''; $('#selInfo').innerHTML = '';
   routeLayer.clearLayers(); stopLayer.clearLayers();
   try {
@@ -1376,7 +1377,7 @@ async function runSearch() {
     const iv = setInterval(() => setStatus('正在準備全港巴士路線資料（第一次要下載較多，約 1 至 3 分鐘，請不要關閉頁面）。' + dbProg), 700);
     let nt;
     try { nt = await loadDb(); } finally { clearInterval(iv); }
-    applyJourneyTimes();
+    applyJourneyTimes(); tm('準備資料');
     const r = +$('#rad').value, maxRides = 4, trM = +$('#trWalk').value * WALK_M_PER_MIN / DETOUR;
     const oNear = nearStops(nt.stops, pts.o.lat, pts.o.lng, r);
     const dNear = nearStops(nt.stops, pts.d.lat, pts.d.lng, r);
@@ -1399,7 +1400,7 @@ async function runSearch() {
     let others = [];
     if (maxRides >= 2) others = twoLegPlans(nt, oNear, dNear, trM);
     if (maxRides >= 3) others = others.concat(transferPlans(nt, raptor(nt, oNear, maxRides, trM), oNear, dNear, 3));
-    others.sort((a, b) => a.est - b.est);
+    others.sort((a, b) => a.est - b.est); tm('靜態計算（直達與轉乘）');
     const store = new Map(), fetched = new Set();
     const getKeys = async (keys, label) => {
       const todo = [...new Set(keys)].filter(k => !fetched.has(k));
@@ -1413,9 +1414,9 @@ async function runSearch() {
     const firstKeys = new Set();
     for (const p of others) { if (firstKeys.size >= 100) break; firstKeys.add(boardKey(p.legs[0])); }
     setStatus(`找到 ${direct.length} 條直達路線和 ${others.length} 個轉乘方案，正在查實時到站…`);
-    await getKeys([...k1, ...firstKeys], '查詢直達及第一程的實時到站');
+    await getKeys([...k1, ...firstKeys], '查詢直達及第一程的實時到站'); tm('查第一批班次');
     const near = (m, n) => [...m.entries()].sort((a, b) => a[1] - b[1]).slice(0, n).map(([id]) => nt.stops.get(id));
-    await prefetchWalk([...near(oNear, 25).map(x => [pts.o, x]), ...near(dNear, 25).map(x => [x, pts.d])], '查詢真實步行距離');
+    await prefetchWalk([...near(oNear, 25).map(x => [pts.o, x]), ...near(dNear, 25).map(x => [x, pts.d])], '查詢真實步行距離'); tm('查步行距離（一）');
     const now = Date.now();
     const ctx = { now, store, stops: nt.stops, o: pts.o, d: pts.d };
     const drops = { nodata: 0, nobus: 0, nochain: 0, slower: 0, est: 0 };
@@ -1519,13 +1520,14 @@ async function runSearch() {
       if (keySet2.size + extra > 200) continue;
       ks.forEach(k => keySet2.add(k)); chosen.push(p);
     }
-    await getKeys([...keySet2], `查詢轉乘方案的實時到站（共 ${chosen.length} 個方案）`);
+    await getKeys([...keySet2], `查詢轉乘方案的實時到站（共 ${chosen.length} 個方案）`); tm('查轉乘後段班次');
     { const pairs = [], sg = (L, k) => nt.stops.get(L.r.stops[k]);
       for (const p of chosen) { const Ls = p.legs;
         pairs.push([pts.o, sg(Ls[0], Ls[0].i)]);
         for (let n = 0; n < Ls.length - 1; n++) pairs.push([sg(Ls[n], Ls[n].j), sg(Ls[n + 1], Ls[n + 1].i)]);
         pairs.push([sg(Ls[Ls.length - 1], Ls[Ls.length - 1].j), pts.d]); }
       await prefetchWalk(pairs.slice(0, 160), '查詢轉乘步行距離'); }
+    tm('查步行距離（二）');
     for (const p of chosen) { const ev = evalPlan(p, ctx); if (ev.drop) note(ev); else T.push({ plan: p, ev }); }
     try { // 逐步搜索：補上舊算法沒列出的組合；轉乘站候車超過 5 分鐘時，補查該站（及 80 米內的站）到終點的班次，再搜索一次
       const have = new Set(T.map(x => planKey(x.plan)));
@@ -1544,7 +1546,7 @@ async function runSearch() {
         return [cs.length, extra.length, added];
       };
       let cs = chaseSearch(nt, store, ctx, oNear, dNear, maxRides, trM);
-      const r1 = await runExtra(cs);
+      const r1 = await runExtra(cs); tm('逐步搜索第一輪');
       const nb80 = neighborsOf(nt, 80), spots = new Set();
       [...T].sort((a, b) => rnd(a.ev) - rnd(b.ev)).slice(0, 40).forEach(x => x.ev.legs.forEach((l, k) => {
         if (k > 0 && l.wait > 5 * 60000) { const sx = nt.sidx.get(x.plan.legs[k].r.stops[x.plan.legs[k].i]); if (sx !== undefined) spots.add(sx); }
@@ -1566,6 +1568,7 @@ async function runSearch() {
           r2 = await runExtra(cs);
         }
       }
+      tm('補查與第二輪');
       chaseInfo = `逐步搜索：找到 ${r1[0]} 個到達終點的組合，其中 ${r1[1]} 個舊算法沒有列出，新增 ${r1[2]} 個方案；轉乘站候車超過 5 分鐘的有 ${spots.size} 個，補查到終點的班次 ${todoN} 項，再新增 ${r2[2]} 個方案`;
     } catch (e) { chaseInfo = '逐步搜索出錯：' + e.message; }
     try { // 規則 A：中途轉車必須比「留在同一班車直接坐到終點附近」快至少 4 分鐘；規則 B：每多轉一次車，要比較少轉車的最好方案快至少 3 分鐘
@@ -1606,6 +1609,7 @@ async function runSearch() {
       }
       chaseInfo += `；規則過濾：轉車前 ${nBefore} 個方案，之後 ${T.length} 個`;
     } catch (e) { chaseInfo += '；轉車規則出錯：' + e.message; }
+    tm('全部完成');
     show(true);
   } catch (e) {
     setStatus('搜索失敗：' + e.message + '。請到「資料測試」分頁看看是哪一項不能用。');
@@ -1738,7 +1742,7 @@ function renderResults() {
     (nDirect ? `<div class="grp g-d">直達</div>` + dHtml : '') +
     (current.length > nDirect ? `<div class="grp g-t">轉乘</div>` + tHtml : '') +
     (rest > 0 ? `<button class="b" id="more" style="width:100%">顯示更多（還有 ${rest} 個）</button>` : '') +
-    `<details class="dbg"><summary>除錯檢查</summary><div>起終點附近靜態找到 ${directReport.length} 個直達方案</div>${statusLog.slice(-14).map(x => '<div>' + esc(x) + '</div>').join('')}<div>${esc(chaseInfo)}</div>${dbgPlans.map(x => '<div>' + esc(x) + '</div>').join('')}${directReport.length ? directReport.map(x => '<div>' + esc(x) + '</div>').join('') : '<div>找不到任何直達路線：起點和終點附近沒有同一條路線經過。</div>'}</details>`;
+    `<details class="dbg"><summary>除錯檢查</summary><div>起終點附近靜態找到 ${directReport.length} 個直達方案</div>${tmLog.map(x => '<div>⏱ ' + esc(x) + '</div>').join('')}${statusLog.slice(-14).map(x => '<div>' + esc(x) + '</div>').join('')}<div>${esc(chaseInfo)}</div>${dbgPlans.map(x => '<div>' + esc(x) + '</div>').join('')}${directReport.length ? directReport.map(x => '<div>' + esc(x) + '</div>').join('') : '<div>找不到任何直達路線：起點和終點附近沒有同一條路線經過。</div>'}</details>`;
   const more = $('#more');
   if (more) more.onclick = () => { shownD = Math.min(nDirect, shownD + 5); shownT = Math.min(current.length - nDirect, shownT + 10); renderResults(); };
 }
