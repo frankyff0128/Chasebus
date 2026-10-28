@@ -218,7 +218,7 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 </div>
 <div id="envWarn" class="banner" hidden style="position:fixed;z-index:1300;left:12px;right:12px;top:70px"></div>
 <button type="button" class="fab" id="btnSet" aria-label="設定">⚙</button>
-<div class="brand">飛巴<span class="ver">v15β</span></div>
+<div class="brand">飛巴<span class="ver">v15β2</span></div>
 <button type="button" class="fab" id="locate" aria-label="回到目前位置">◎</button>
 
 <div id="homeBox">
@@ -294,7 +294,8 @@ const SAME_STOP_M = 100; // 相距不足 100 米的站視為同一個站
 const PED = 'https://mapapi.hkmapservice.gov.hk/PedRoute/NAServer/route/';
 const pedCache = new Map(), pedPath = new Map(); let pedMode = null, pedFails = 0, pedOk = 0;
 /* 快速版（分支）參數：全部集中在這裏，方便測試時調整 */
-const SPEED = { maxRides: 3, directN: 25, directKeys: 60, firstKeys: 50, chosenKeys: 100, extraPlans: 40, extraKeys: 200, suppKeys: 150, suppSpots: 8, originStops: 10, etaMs: 8000, phaseMs: 10000, walkMs: 3500, refineN: 12, beam: 150 };
+const SPEED = { maxRides: 4, directN: 40, directKeys: 130, firstKeys: 100, chosenKeys: 200, extraPlans: 80, extraKeys: 500, suppKeys: 500, suppSpots: 999, originStops: 25, etaMs: 8000, phaseMs: 10000, walkMs: 3500, refineN: 12, beam: 150, merge: 1, spec: 0, budgetMs: 6000 };
+{ const q = new URLSearchParams(location.search); for (const k of Object.keys(SPEED)) if (q.has(k) && isFinite(+q.get(k))) SPEED[k] = +q.get(k); }   // 測試用：網址後面加 ?rides=… 之類可以覆蓋（例如 ?maxRides=3&merge=0）
 const pedKey = (a, b) => a.lat.toFixed(5) + ',' + a.lng.toFixed(5) + '|' + b.lat.toFixed(5) + ',' + b.lng.toFixed(5);
 function realMin(a, b, fbM, transfer) {
   const m = pedCache.get(pedKey(a, b));
@@ -1372,7 +1373,7 @@ function onType(which) {
 }
 
 /* ---------- 搜索 ---------- */
-let dbgPlans = []; let tmLog = []; let chaseInfo = ''; let directReport = []; let current = []; let nDirect = 0, shownD = 0, shownT = 0; let selectedIdx = -1; let searchState = null;
+let dbgPlans = []; let lastKeys = 0; let tmLog = []; let chaseInfo = ''; let directReport = []; let current = []; let nDirect = 0, shownD = 0, shownT = 0; let selectedIdx = -1; let searchState = null;
 const LEG_COLORS = ['#0aa58a', '#2f7de1', '#8b5cf6', '#e8890c'];
 
 async function pool(items, n, fn, onDone) {
@@ -1429,7 +1430,7 @@ async function runSearch() {
     const store = new Map(), fetched = new Set();
     const getKeys = async (keys, label) => {
       const todo = [...new Set(keys)].filter(k => !fetched.has(k));
-      todo.forEach(k => fetched.add(k));
+      todo.forEach(k => fetched.add(k)); lastKeys = todo.length;
       let done = 0;
       await Promise.race([pool(todo, 12, k => fetchEta(k, store), () => { done++; if (done % 5 === 0) setStatus(`${label}（${done}／${todo.length}）`); }), new Promise(r => setTimeout(r, SPEED.phaseMs))]);
       store.flow = null;
@@ -1440,7 +1441,8 @@ async function runSearch() {
     const firstKeys = new Set();
     for (const p of others) { if (firstKeys.size >= SPEED.firstKeys) break; firstKeys.add(boardKey(p.legs[0])); }
     setStatus(`找到 ${direct.length} 條直達路線和 ${others.length} 個轉乘方案，正在查實時到站…`);
-    await getKeys([...k1, ...firstKeys], '查詢直達及第一程的實時到站'); tm('查第一批班次');
+    const specKeys = new Set(); if (SPEED.spec > 0) for (const p of others.slice(0, SPEED.spec)) planKeys(p).forEach(k => specKeys.add(k));   // 預先同時查最有希望的轉乘方案
+    await getKeys([...k1, ...firstKeys, ...specKeys], '查詢直達及第一程的實時到站'); tm('查第一批班次（' + lastKeys + ' 項）');
     const near = (m, n) => [...m.entries()].sort((a, b) => a[1] - b[1]).slice(0, n).map(([id]) => nt.stops.get(id));
     tm('（略過步行查詢，初篩用直線估算）');
     const now = Date.now();
@@ -1546,7 +1548,7 @@ async function runSearch() {
       if (keySet2.size + extra > SPEED.chosenKeys) continue;
       ks.forEach(k => keySet2.add(k)); chosen.push(p);
     }
-    await getKeys([...keySet2], `查詢轉乘方案的實時到站（共 ${chosen.length} 個方案）`); tm('查轉乘後段班次');
+    await getKeys([...keySet2], `查詢轉乘方案的實時到站（共 ${chosen.length} 個方案）`); tm('查轉乘後段班次（' + lastKeys + ' 項）');
     tm('查步行距離（二）');
     for (const p of chosen) { const ev = evalPlan(p, ctx); if (ev.drop) note(ev); else T.push({ plan: p, ev }); }
     try { // 逐步搜索：補上舊算法沒列出的組合；轉乘站候車超過 5 分鐘時，補查該站（及 80 米內的站）到終點的班次，再搜索一次
@@ -1559,6 +1561,34 @@ async function runSearch() {
         for (const p of extra) { const ev = evalPlan(p, ctx); if (!ev.drop) { T.push({ plan: p, ev }); added++; } }
         return [cs.length, extra.length, added];
       };
+      let cs = chaseSearch(nt, store, ctx, oNear, dNear, maxRides, trM);
+      if (SPEED.merge) {
+        // 合併模式：新方案的班次、候車較長的轉乘站的補查，一次過同時查（省下兩輪網絡等候），再搜索一次
+        const extra1 = cs.filter(p => !have.has(planKey(p))).slice(0, SPEED.extraPlans);
+        const keys = extra1.flatMap(planKeys).slice(0, SPEED.extraKeys);
+        const nb80 = neighborsOf(nt, 80), spots = new Set();
+        [...T].sort((a, b) => rnd(a.ev) - rnd(b.ev)).slice(0, 40).forEach(x => x.ev.legs.forEach((l, k) => {
+          if (k > 0 && l.wait > 5 * 60000) { const sx = nt.sidx.get(x.plan.legs[k].r.stops[x.plan.legs[k].i]); if (sx !== undefined) spots.add(sx); }
+        }));
+        const sk = [];
+        for (const sx of [...spots].slice(0, SPEED.suppSpots)) for (const x of [sx, ...nb80[sx].map(([j]) => j)]) for (const [ri, k] of nt.routesAt[x]) {
+          const r = nt.routes[ri]; let jd = -1;
+          for (let j = k + 1; j < r.stops.length; j++) if (dNear.has(r.stops[j])) { jd = j; break; }
+          if (jd < 0) continue;
+          (isKmb(r) ? [boardKey({ r, i: k })] : legKeys({ r, i: k, j: jd })).forEach(q => sk.push(q));
+        }
+        keys.push(...[...new Set(sk)].filter(k => !fetched.has(k)).slice(0, SPEED.suppKeys));
+        await getKeys(keys, '查詢新方案及候車較長的轉乘站的班次'); tm('逐步搜索與補查的班次（' + lastKeys + ' 項）');
+        cs = chaseSearch(nt, store, ctx, oNear, dNear, maxRides, trM);
+        const all = cs.filter(p => !have.has(planKey(p))).slice(0, SPEED.extraPlans);
+        all.forEach(p => have.add(planKey(p)));
+        const miss = all.flatMap(planKeys).filter(k => !fetched.has(k));
+        if (miss.length && performance.now() - T0 < SPEED.budgetMs) { await getKeys(miss.slice(0, SPEED.extraKeys), '補查新方案缺少的班次'); tm('補查缺少的班次（' + lastKeys + ' 項）'); }
+        let added = 0;
+        for (const p of all) { const ev = evalPlan(p, ctx); if (!ev.drop) { T.push({ plan: p, ev }); added++; } }
+        tm('逐步搜索計算');
+        chaseInfo = `逐步搜索（合併模式）：找到 ${cs.length} 個到達終點的組合，其中 ${all.length} 個舊算法沒有列出，新增 ${added} 個方案；候車超過 5 分鐘的轉乘站 ${spots.size} 個；缺班次資料而略過補查的方案 ${miss.length ? '約 ' + miss.length + ' 項' : '沒有'}`;
+      } else {
       let cs = chaseSearch(nt, store, ctx, oNear, dNear, maxRides, trM);
       const r1 = await runExtra(cs); tm('逐步搜索第一輪');
       const nb80 = neighborsOf(nt, 80), spots = new Set();
@@ -1584,6 +1614,7 @@ async function runSearch() {
       }
       tm('補查與第二輪');
       chaseInfo = `逐步搜索：找到 ${r1[0]} 個到達終點的組合，其中 ${r1[1]} 個舊算法沒有列出，新增 ${r1[2]} 個方案；轉乘站候車超過 5 分鐘的有 ${spots.size} 個，補查到終點的班次 ${todoN} 項，再新增 ${r2[2]} 個方案`;
+      }
     } catch (e) { chaseInfo = '逐步搜索出錯：' + e.message; }
     try { // 規則 A：中途轉車必須比「留在同一班車直接坐到終點附近」快至少 4 分鐘；規則 B：每多轉一次車，要比較少轉車的最好方案快至少 3 分鐘
       const GAIN_STAY = 4, GAIN_MORE = 3, nBefore = T.length, stayCache = new Map();
