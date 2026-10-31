@@ -1,6 +1,6 @@
 {
-  "name": "飛巴",
-  "short_name": "飛巴",
+  "name": "追巴士",
+  "short_name": "追巴士",
   "description": "香港巴士轉乘路線搜尋",
   "start_url": "./",
   "scope": "./",
