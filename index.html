@@ -232,7 +232,7 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 </div>
 <div id="envWarn" class="banner" hidden style="position:fixed;z-index:1300;left:12px;right:12px;top:70px"></div>
 <button type="button" class="fab" id="btnSet" aria-label="設定">⚙</button>
-<div class="brand">追巴士<span class="ver">v16</span></div>
+<div class="brand">追巴士<span class="ver">v16.1</span></div>
 <button type="button" class="fab" id="locate" aria-label="回到目前位置">◎</button>
 
 <div id="homeBox">
@@ -1496,6 +1496,7 @@ async function runSearch() {
     directReport = report;
     const rnd = ev => Math.round(ev.totalSec / 60);
     const show = final => {
+      for (let i = T.length - 1; i >= 0; i--) if (T[i].ev.transfers === 0) D.push(T.splice(i, 1)[0]);   // 只有一程巴士的方案（例如留在原車、改在別的站下車）算直達，不放在轉乘裏
       /* 排序：
          1. 總時間相近的方案歸為同一組：以該組最快者為基準，容許 5%（最少 1 分鐘、最多 3 分鐘）。
          2. 組內先比轉乘次數（少者優先），再比「候車扣分」（每一次候車分開計算，等得越久扣分越重，
@@ -1851,7 +1852,12 @@ function renderResults() {
          運輸署「道路網絡路段的行車速度」（每 2 分鐘更新，路段編號 = 道路中線的 ROUTE_ID） */
 const WFS_URL = 'https://portal.csdi.gov.hk/server/services/common/td_rcd_1638949160594_2844/MapServer/WFSServer';
 const SPEED_URL = 'https://resource.data.one.gov.hk/td/traffic-detectors/irnAvgSpeed-all.xml';
-const SLOW_KMH = 30, JAM_KMH = 15;   // 低於 30 公里/小時算緩慢，低於 15 公里/小時算擠塞
+const FAST_ROAD = /公路|走廊|繞道|隧道|大橋|高速|快速/;
+/* 塞車程度：市區道路低於 20 公里/小時算緩慢、低於 10 算擠塞；快速公路（公路、走廊、繞道、隧道、大橋）低於 40 算緩慢、低於 20 算擠塞 */
+function jamLevel(rid, v) {
+  const fast = FAST_ROAD.test(RoadNet.name(rid) || ''), slow = fast ? 40 : 20, jam = fast ? 20 : 10;
+  return v < jam ? 'jam' : v < slow ? 'slow' : null;
+}
 class MinHeap {
   constructor() { this.a = []; }
   get size() { return this.a.length; }
@@ -2119,7 +2125,7 @@ async function drawRoad(idx, legs, nt, legLines) {
         run = null;
       };
       for (const sg of res.segs) {
-        const v = sg.rid == null ? undefined : speeds.get(String(sg.rid)), c = v === undefined ? null : v < JAM_KMH ? '#ff3b30' : v < SLOW_KMH ? '#ffd60a' : null;
+        const v = sg.rid == null ? undefined : speeds.get(String(sg.rid)), c = v === undefined ? null : ({ jam: '#ff3b30', slow: '#ffd60a' })[jamLevel(sg.rid, v)] || null;
         if (c && run && run.c === c) { run.pts.push(sg.b); run.vs.push(v); } else { flush(); if (c) run = { c, pts: [sg.a, sg.b], vs: [v], rid: sg.rid }; }
       }
       flush();
@@ -2219,6 +2225,44 @@ const wfsLayer = async () => {
   return { names, pick: names.find(n => /center|centre|rcl/i.test(n)) || names[0] };
 };
 const tests = [
+  ['巴士路線線形：圖層與樣本（空間數據共享平台 WFS，網址為推測）', async () => {
+    const base = 'https://portal.csdi.gov.hk/server/services/common/td_rcd_1638844988873_41214/MapServer/WFSServer';
+    const t = await getText(base + '?service=WFS&request=GetCapabilities', 30000);
+    const d = new DOMParser().parseFromString(t, 'text/xml');
+    const names = [...d.getElementsByTagNameNS('*', 'FeatureType')].map(f => { const n = f.getElementsByTagNameNS('*', 'Name')[0]; return n ? n.textContent : ''; }).filter(Boolean);
+    if (!names.length) throw new Error('讀到回應但找不到圖層：' + t.slice(0, 160));
+    let out = `圖層 ${names.length} 個：${names.join('、').slice(0, 200)}`;
+    for (const nm of names.slice(0, 3)) {
+      try {
+        const g = await getJSON(base + '?service=WFS&version=2.0.0&request=GetFeature&typeNames=' + encodeURIComponent(nm) + '&count=2&outputFormat=GEOJSON&srsName=EPSG:4326', 30000, 1);
+        const f = g.features && g.features[0];
+        out += `；【${nm}】` + (f ? `形狀 ${f.geometry && f.geometry.type}，欄位 ${Object.keys(f.properties || {}).join(',')}，第一筆 ${JSON.stringify(f.properties).slice(0, 200)}` : '沒有資料');
+      } catch (e) { out += `；【${nm}】查詢失敗：${e.message}`; }
+    }
+    return out;
+  }],
+  ['巴士路線線形：用欄位篩選一條路線（試幾種寫法）', async () => {
+    const base = 'https://portal.csdi.gov.hk/server/services/common/td_rcd_1638844988873_41214/MapServer/WFSServer';
+    const t = await getText(base + '?service=WFS&request=GetCapabilities', 30000);
+    const d = new DOMParser().parseFromString(t, 'text/xml');
+    const names = [...d.getElementsByTagNameNS('*', 'FeatureType')].map(f => { const n = f.getElementsByTagNameNS('*', 'Name')[0]; return n ? n.textContent : ''; }).filter(Boolean);
+    const q = nm => base + '?service=WFS&version=2.0.0&request=GetFeature&typeNames=' + encodeURIComponent(nm) + '&outputFormat=GEOJSON&srsName=EPSG:4326';
+    const res = [];
+    for (const nm of names.slice(0, 3)) {
+      const g = await getJSON(q(nm) + '&count=1', 30000, 1).catch(() => null);
+      const f = g && g.features && g.features[0]; if (!f) continue;
+      const key = Object.keys(f.properties).find(k => /^route_?id$/i.test(k)) || Object.keys(f.properties).find(k => /route/i.test(k));
+      if (!key) { res.push(`【${nm}】沒有路線編號欄位`); continue; }
+      const val = f.properties[key], lit = typeof val === 'number' ? val : String(val);
+      const fes = ref => '<fes:Filter xmlns:fes="http://www.opengis.net/fes/2.0"><fes:PropertyIsEqualTo><fes:ValueReference>' + ref + '</fes:ValueReference><fes:Literal>' + lit + '</fes:Literal></fes:PropertyIsEqualTo></fes:Filter>';
+      const tries = [['FES 欄位名', q(nm) + '&filter=' + encodeURIComponent(fes(key))], ['FES 圖層名:欄位名', q(nm) + '&filter=' + encodeURIComponent(fes(nm.split(':')[0] + ':' + key))], ['CQL', q(nm) + '&cql_filter=' + encodeURIComponent(key + '=' + (typeof lit === 'number' ? lit : "'" + lit + "'"))]];
+      for (const [label, url] of tries) {
+        try { const r = await getJSON(url, 30000, 1); res.push(`【${nm}】${label}（${key}=${lit}）：取回 ${(r.features || []).length} 筆`); }
+        catch (e) { res.push(`【${nm}】${label}：失敗 ${e.message}`); }
+      }
+    }
+    return res.join('；') || '沒有取得樣本';
+  }],
   ['政府駕駛路線服務（運輸署 TDAS，出行易駕駛路線同一個來源）', async () => {
     const t0 = Date.now();
     let r;
