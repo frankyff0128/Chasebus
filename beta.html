@@ -232,7 +232,7 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 </div>
 <div id="envWarn" class="banner" hidden style="position:fixed;z-index:1300;left:12px;right:12px;top:70px"></div>
 <button type="button" class="fab" id="btnSet" aria-label="設定">⚙</button>
-<div class="brand">追巴士<span class="ver">v16.1</span></div>
+<div class="brand">追巴士<span class="ver">v16.2</span></div>
 <button type="button" class="fab" id="locate" aria-label="回到目前位置">◎</button>
 
 <div id="homeBox">
@@ -1400,7 +1400,7 @@ function onType(which) {
 }
 
 /* ---------- 搜索 ---------- */
-let dbgPlans = []; let lastKeys = 0; let tmLog = []; let chaseInfo = ''; let directReport = []; let current = []; let nDirect = 0, shownD = 0, shownT = 0; let selectedIdx = -1; let searchState = null;
+let dbgPlans = []; let walkLog = []; let lastKeys = 0; let tmLog = []; let chaseInfo = ''; let directReport = []; let current = []; let nDirect = 0, shownD = 0, shownT = 0; let selectedIdx = -1; let searchState = null;
 const LEG_COLORS = ['#0aa58a', '#2f7de1', '#8b5cf6', '#e8890c'];
 
 async function pool(items, n, fn, onDone) {
@@ -1417,7 +1417,9 @@ async function fetchEta(key, store) {
   } catch (e) { store.set(key, null); }
 }
 
-async function runSearch() {
+async function runSearch(boost) {
+  const boostRange = boost === true;   // 注意：按鈕點擊也會傳進一個事件，所以要明確等於 true 才算
+
   const go = $('#go'); go.disabled = true; openBox(); progStart();
   const T0 = performance.now(); tmLog = []; const tm = l => tmLog.push(l + '：' + ((performance.now() - T0) / 1000).toFixed(1) + ' 秒');
   $('#selInfo').innerHTML = '';
@@ -1433,7 +1435,7 @@ async function runSearch() {
     let nt;
     try { nt = await loadDb(); } finally { clearInterval(iv); }
     applyJourneyTimes(); tm('準備資料');
-    let rO = SPEED.rO, rD = SPEED.rD; const maxRides = SPEED.maxRides, trM = SPEED.trMin * WALK_M_PER_MIN / DETOUR;
+    let rO = boostRange ? Math.max(SPEED.rO, 1200) : SPEED.rO, rD = boostRange ? Math.max(SPEED.rD, 1500) : SPEED.rD; const maxRides = SPEED.maxRides, trM = SPEED.trMin * WALK_M_PER_MIN / DETOUR;
     let oNear = nearStops(nt.stops, pts.o.lat, pts.o.lng, rO), dNear = nearStops(nt.stops, pts.d.lat, pts.d.lng, rD);
     while (!oNear.size && rO < 1200) { rO = rO < 800 ? 800 : 1200; oNear = nearStops(nt.stops, pts.o.lat, pts.o.lng, rO); }   // 起點附近真的沒有站才放大範圍
     while (!dNear.size && rD < 1500) { rD = rD < 1000 ? 1000 : 1500; dNear = nearStops(nt.stops, pts.d.lat, pts.d.lng, rD); }
@@ -1708,9 +1710,16 @@ async function runSearch() {
         if (!ev.drop) x.ev = ev;
       }
       tm('精算步行距離（' + top.length + ' 個方案）');
+      walkLog = top.slice(0, 8).map(x => {
+        const Ls = x.plan.legs, segs = [['起點→上車站', pts.o, sg(Ls[0], Ls[0].i)]];
+        for (let n = 0; n < Ls.length - 1; n++) segs.push(['轉乘', sg(Ls[n], Ls[n].j), sg(Ls[n + 1], Ls[n + 1].i)]);
+        segs.push(['下車站→終點', sg(Ls[Ls.length - 1], Ls[Ls.length - 1].j), pts.d]);
+        return Ls.map(l => l.r.route).join('→') + '（' + rnd(x.ev) + ' 分鐘）：' + segs.map(([nm, a, b]) => { const m = pedCache.get(pedKey(a, b)); return nm + ' ' + (m !== undefined ? '真實 ' + Math.round(m) + ' 米' : '估算 ' + Math.round(hav(a.lat, a.lng, b.lat, b.lng)) + ' 米(直線)'); }).join('；');
+      });
     }
     tm('全部完成');
     show(true);
+    if (!boostRange && !D.length && !T.length) { toast('附近沒有合適的班次，擴大範圍再找一次…'); await runSearch(true); }
   } catch (e) {
     setStatus('搜索失敗：' + e.message + '。請到「資料測試」分頁看看是哪一項不能用。');
   } finally { $('#sum').classList.remove('pulse'); refreshGo(); progEnd(); savePed().catch(() => {}); if ($('#results').querySelector('.skel')) { $('#results').innerHTML = ''; setView('home'); } }
@@ -1842,7 +1851,7 @@ function renderResults() {
     (nDirect ? `<div class="grp g-d">直達</div>` + dHtml : '') +
     (current.length > nDirect ? `<div class="grp g-t">轉乘</div>` + tHtml : '') +
     (rest > 0 ? `<button class="b" id="more" style="width:100%">顯示更多（還有 ${rest} 個）</button>` : '') +
-    (DEBUG ? `<details class="dbg"><summary>除錯檢查</summary><div>起終點附近靜態找到 ${directReport.length} 個直達方案</div>${tmLog.map(x => '<div>⏱ ' + esc(x) + '</div>').join('')}${statusLog.slice(-14).map(x => '<div>' + esc(x) + '</div>').join('')}<div>${esc(chaseInfo)}</div>${dbgPlans.map(x => '<div>' + esc(x) + '</div>').join('')}${directReport.length ? directReport.map(x => '<div>' + esc(x) + '</div>').join('') : '<div>找不到任何直達路線：起點和終點附近沒有同一條路線經過。</div>'}</details>` : '');
+    (DEBUG ? `<details class="dbg"><summary>除錯檢查</summary><div>起終點附近靜態找到 ${directReport.length} 個直達方案</div>${tmLog.map(x => '<div>⏱ ' + esc(x) + '</div>').join('')}${walkLog.map(x => '<div>🚶 ' + esc(x) + '</div>').join('')}${statusLog.slice(-14).map(x => '<div>' + esc(x) + '</div>').join('')}<div>${esc(chaseInfo)}</div>${dbgPlans.map(x => '<div>' + esc(x) + '</div>').join('')}${directReport.length ? directReport.map(x => '<div>' + esc(x) + '</div>').join('') : '<div>找不到任何直達路線：起點和終點附近沒有同一條路線經過。</div>'}</details>` : '');
   const more = $('#more');
   if (more) more.onclick = () => { shownD = Math.min(nDirect, shownD + 5); shownT = Math.min(current.length - nDirect, shownT + 10); renderResults(); };
 }
@@ -2225,6 +2234,26 @@ const wfsLayer = async () => {
   return { names, pick: names.find(n => /center|centre|rcl/i.test(n)) || names[0] };
 };
 const tests = [
+  ['營運時間資料（hkbus 班次 freq）', async () => {
+    let j = null; for (const u of SEC_URLS) { try { j = await getJSON(u, 240000, 1); break; } catch (e) { /* 試下一個 */ } }
+    if (!j) throw new Error('讀不到 hkbus 資料');
+    const list = Object.values(j.routeList || {}), withF = list.filter(e => e.freq && Object.keys(e.freq).length);
+    const show = r => { const e = list.find(x => x.route === r && (x.co || []).some(c => c === 'ctb' || c === 'kmb')); return e ? `${e.route}(${(e.co || []).join('+')}) freq=${JSON.stringify(e.freq).slice(0, 240)}` : r + ' 找不到'; };
+    return `共 ${list.length} 條，有班次資料 ${withF.length} 條；${show('N118')}；${show('101')}；${show('N8P')}`;
+  }],
+  ['巴士路線線形：只取欄位、不取形狀（看大小和速度）', async () => {
+    const base = 'https://portal.csdi.gov.hk/server/services/common/td_rcd_1638844988873_41214/MapServer/WFSServer', t0 = Date.now();
+    const t = await getText(base + '?service=WFS&version=2.0.0&request=GetFeature&typeNames=csdi:FB_ROUTE_LINE&outputFormat=GEOJSON&srsName=EPSG:4326&propertyName=ROUTE_ID,ROUTE_SEQ,COMPANY_CODE,ROUTE_NAMEE', 90000);
+    const g = JSON.parse(t), f = g.features && g.features[0];
+    return `${(g.features || []).length} 筆、${Math.round(t.length / 1024)} KB、${Date.now() - t0} 毫秒；形狀 ${f && f.geometry ? '仍有（' + f.geometry.type + '）' : '已省略'}；第一筆 ${f ? JSON.stringify(f.properties).slice(0, 160) : '無'}`;
+  }],
+  ['巴士路線線形：用編號取單一路線（resourceId）和取 50 筆的大小', async () => {
+    const base = 'https://portal.csdi.gov.hk/server/services/common/td_rcd_1638844988873_41214/MapServer/WFSServer', q = '?service=WFS&version=2.0.0&request=GetFeature&typeNames=csdi:FB_ROUTE_LINE&outputFormat=GEOJSON&srsName=EPSG:4326';
+    const out = [];
+    try { const g = await getJSON(base + q + '&resourceId=FB_ROUTE_LINE.5', 30000, 1); out.push('resourceId=FB_ROUTE_LINE.5：取回 ' + (g.features || []).length + ' 筆'); } catch (e) { out.push('resourceId 失敗：' + e.message); }
+    try { const t0 = Date.now(), t = await getText(base + q + '&count=50', 60000); out.push('取 50 筆形狀：' + Math.round(t.length / 1024) + ' KB、' + (Date.now() - t0) + ' 毫秒'); } catch (e) { out.push('取 50 筆失敗：' + e.message); }
+    return out.join('；');
+  }],
   ['巴士路線線形：圖層與樣本（空間數據共享平台 WFS，網址為推測）', async () => {
     const base = 'https://portal.csdi.gov.hk/server/services/common/td_rcd_1638844988873_41214/MapServer/WFSServer';
     const t = await getText(base + '?service=WFS&request=GetCapabilities', 30000);
