@@ -232,7 +232,7 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 </div>
 <div id="envWarn" class="banner" hidden style="position:fixed;z-index:1300;left:12px;right:12px;top:70px"></div>
 <button type="button" class="fab" id="btnSet" aria-label="設定">⚙</button>
-<div class="brand">追巴士<span class="ver">v16.3</span></div>
+<div class="brand">追巴士<span class="ver">v17</span></div>
 <button type="button" class="fab" id="locate" aria-label="回到目前位置">◎</button>
 
 <div id="homeBox">
@@ -308,7 +308,7 @@ const PED = 'https://mapapi.hkmapservice.gov.hk/PedRoute/NAServer/route/';
 const pedCache = new Map(), pedPath = new Map(); let pedMode = null, pedFails = 0, pedOk = 0;
 const DEBUG = /beta|debug/i.test(location.pathname) || /[?&]debug=1/.test(location.search);   // 只有創作者的測試網址才顯示資料測試與除錯檢查
 /* 參數：全部集中在這裏，方便測試時調整 */
-const SPEED = { rO: 400, rD: 700, trMin: 5, maxRides: 3, directN: 40, directKeys: 160, firstKeys: 100, chosenKeys: 300, extraPlans: 80, extraKeys: 500, suppKeys: 500, suppSpots: 999, originStops: 25, etaMs: 8000, phaseMs: 10000, walkMs: 3500, refineN: 12, beam: 150, merge: 1, spec: 0, budgetMs: 6000, hubs: 1, nocache: 0, op: 1, opHorizon: 75, shiftN: 12, shiftKeys: 120 };
+const SPEED = { rO: 400, rD: 700, trMin: 5, maxRides: 3, directN: 40, directKeys: 160, firstKeys: 100, chosenKeys: 300, extraPlans: 80, extraKeys: 500, suppKeys: 500, suppSpots: 999, originStops: 25, etaMs: 8000, phaseMs: 10000, walkMs: 3500, refineN: 12, beam: 150, merge: 1, spec: 0, budgetMs: 6000, hubs: 1, nocache: 0, sched: 1, op: 1, opHorizon: 75, shiftN: 12, shiftKeys: 120 };
 { const q = new URLSearchParams(location.search); for (const k of Object.keys(SPEED)) if (q.has(k) && isFinite(+q.get(k))) SPEED[k] = +q.get(k); }   // 測試用：網址後面加 ?rides=… 之類可以覆蓋（例如 ?maxRides=3&merge=0）
 const pedKey = (a, b) => a.lat.toFixed(5) + ',' + a.lng.toFixed(5) + '|' + b.lat.toFixed(5) + ',' + b.lng.toFixed(5);
 function realMin(a, b, fbM, transfer) {
@@ -663,7 +663,7 @@ function planKeys(plan) {
   return ks;
 }
 /* 一程巴士在第 p 個站的到站列表（按時間排好）。沒有取得資料時回傳 null */
-function etaAt(r, p, store) {
+function etaAtRaw(r, p, store) {
   if (isKmb(r)) {
     const key = 'k|' + r.route + '|' + r.st, data = store.get(key);
     if (!data) return null;
@@ -687,6 +687,13 @@ function etaAt(r, p, store) {
   out.sort((a, b) => a.t - b.t);
   store.cby.set(mk, { d: data, out });
   return out;
+}
+function etaAt(r, p, store) {
+  const l = etaAtRaw(r, p, store);
+  if (l === null || (l && l.length) || !SPEED.sched) return l;      // 有預報，或根本沒查過：照舊
+  const sl = schedList(r, p, Date.now());                              // 查過但沒有預報：用時間表推算
+  if (sl && sl.length) { schedUsed++; return sl; }
+  return l;
 }
 /* 跟著同一班車（九巴）：已知它在第 i 站的時間 t0，用各站的到站預報找出它之後每個站的到達時間。
    官方資料沒有車輛編號，所以靠「時間先後」配對：下一站的時間必須晚於上一站，
@@ -1022,7 +1029,7 @@ async function idbSet(k, v) { const d = await idb(); return new Promise((res, re
 
 let dbPromise = null, net = null, dbInfo = null, dbProg = '';
 function setProg(t) { dbProg = t; const e = $('#dbStat'); if (e) e.textContent = t; }
-const DB_MAX_AGE = 3 * 24 * 3600 * 1000; // 路線資料每日更新，暫存用 3 日
+const DB_MAX_AGE = Infinity;   // 路線資料只有第一次全部下載，之後靠「檢查更新」只更新變動的部分
 
 async function fetchKmbDb() {
   setProg('正在下載九巴／龍運路線資料…');
@@ -1033,6 +1040,10 @@ async function fetchKmbDb() {
 }
 async function fetchCtbDb() {
   const rl = (await getJSON(CTB + '/route/ctb', 40000)).data;
+  return fetchCtbFor(rl, new Set());
+}
+/* 取指定的城巴路線（站序和還沒有的車站）。known＝已經有資料的車站 id，不用再取 */
+async function fetchCtbFor(rl, known) {
   const jobs = [];
   rl.forEach(r => ['O', 'I'].forEach(d => jobs.push([r.route, d])));
   const rs = new Map(); let done = 0, failed = 0;
@@ -1043,7 +1054,7 @@ async function fetchCtbDb() {
     } catch (e) { failed++; }
   }, () => { done++; if (done % 20 === 0) setProg(`正在下載城巴路線資料 ${done}／${jobs.length}…`); });
   const ids = new Set();
-  rs.forEach(a => a.forEach(x => ids.add(x)));
+  rs.forEach(a => a.forEach(x => { if (!known.has(x)) ids.add(x); }));
   const idList = [...ids], info = new Map(); let sd = 0, sFail = 0;
   await pool(idList, 10, async id => {
     try {
@@ -1056,25 +1067,48 @@ async function fetchCtbDb() {
   return { db: ctbDb(rl, rs, info), ok: rl.length > 0 && bad <= (jobs.length + idList.length) * 0.1, bad };
 }
 /* 路線資料的「指紋」：九巴／龍運的路線方向和城巴的路線，只要有增減或改動，指紋就不同 */
-async function routeSig() {
-  const [k, c] = await Promise.all([getJSON(`${KMB}/route/`, 20000, 2), getJSON(`${CTB}/route/CTB`, 20000, 2)]);
-  const a = (k.data || []).map(x => x.route + '|' + x.bound + '|' + x.service_type).concat((c.data || []).map(x => 'C' + x.route)).sort().join(',');
+function sigOf(kr, cr) {
+  const a = (kr.data || []).map(x => x.route + '|' + x.bound + '|' + x.service_type + '|' + x.orig_tc + '|' + x.dest_tc).concat((cr.data || []).map(x => 'C' + x.route + '|' + x.orig_tc + '|' + x.dest_tc)).sort().join(',');
   let h = 0; for (let i = 0; i < a.length; i++) h = (h * 31 + a.charCodeAt(i)) | 0;
   return a.length + ':' + h;
 }
+async function routeSig() {
+  const [k, c] = await Promise.all([getJSON(`${KMB}/route/`, 20000, 2), getJSON(`${CTB}/route/CTB`, 20000, 2)]);
+  return sigOf(k, c);
+}
+/* 檢查官方路線名單有沒有更新：沒有就什麼都不用下載；有的話，九巴／龍運重新取（只有 3 個請求），城巴只取新增和改動的路線 */
+async function updateRoutes(say) {
+  let cached = null; try { cached = await idbGet('db2'); } catch (e) { /* 忽略 */ }
+  if (!cached || !cached.db) { say('第一次使用，正在下載全部路線資料（只需要一次，大約幾分鐘）…'); dbPromise = null; await loadDb(true); return { full: true }; }
+  const [kr, cr] = await Promise.all([getJSON(`${KMB}/route/`, 30000, 2), getJSON(`${CTB}/route/ctb`, 30000, 2)]);
+  const sig = sigOf(kr, cr);
+  if (cached.sig === sig) { cached.chk = Date.now(); try { await idbSet('db2', cached); } catch (e) { /* 忽略 */ } return { changed: false, t: cached.t }; }
+  say('發現路線有更新，正在更新變動的部分…');
+  const db = cached.db;
+  const k = kmbDb(kr, await getJSON(KMB + '/stop', 90000), await getJSON(KMB + '/route-stop/', 90000));
+  const oldC = new Map(); for (const r of db.routes) if (r.co[0] === 'ctb' && r.bound.ctb === 'O') oldC.set(r.route, r);
+  const fresh = new Map((cr.data || []).map(r => [r.route, r]));
+  const changed = [...fresh.values()].filter(r => { const o = oldC.get(r.route); return !o || o.orig !== r.orig_tc || o.dest !== r.dest_tc; });
+  const removed = new Set([...oldC.keys()].filter(x => !fresh.has(x)));
+  let nc = { db: { routes: [], stops: {} }, ok: true, bad: 0 };
+  if (changed.length) nc = await fetchCtbFor(changed, new Set(Object.keys(db.stops)));
+  const newIds = new Set(nc.db.routes.map(r => r.id));
+  const keepC = db.routes.filter(r => r.co[0] === 'ctb' && !removed.has(r.route) && !newIds.has(r.id));
+  const merged = { routes: k.routes.concat(keepC, nc.db.routes), stops: Object.assign({}, db.stops, k.stops, nc.db.stops) };
+  net = buildNet(merged); dbPromise = Promise.resolve(net); dbInfo = { how: '剛更新路線資料', ctbErr: '' };
+  await idbSet('db2', { t: Date.now(), db: merged, sig: nc.ok ? sig : cached.sig, chk: Date.now() });   // 城巴有路線沒更新成功，就保留舊指紋，下次再試
+  return { changed: true, ctbChanged: changed.length, ctbRemoved: removed.size, ok: nc.ok };
+}
+
 async function checkRoutes() {
   const st = $('#dbStat'), btn = $('#chkRoutes'); btn.disabled = true; st.textContent = '檢查中…';
   try {
-    const sig = await routeSig();
-    let cached = null; try { cached = await idbGet('db2'); } catch (e) { /* 忽略 */ }
-    if (cached && cached.sig === sig) { st.textContent = '路線已經是最新（' + new Date(cached.t).toLocaleDateString('zh-HK') + ' 下載）'; return; }
-    st.textContent = '路線有更新，正在下載，請稍候…';
-    const t0 = Date.now(); dbPromise = null; await loadDb(true);
-    const c2 = await idbGet('db2'); if (c2 && !c2.sig) { c2.sig = sig; await idbSet('db2', c2); }
-    st.textContent = '路線資料已更新（用了 ' + Math.round((Date.now() - t0) / 1000) + ' 秒）';
+    const r = await updateRoutes(t => { st.textContent = t; });
+    st.textContent = r.full ? '路線資料已下載完成' : !r.changed ? '路線已經是最新' : `路線已更新（城巴更新 ${r.ctbChanged} 條、移除 ${r.ctbRemoved} 條；九巴／龍運已更新）${r.ok ? '' : '。部分城巴路線未能更新，下次再試'}`;
   } catch (e) { st.textContent = '檢查失敗：' + e.message; }
   finally { btn.disabled = false; }
 }
+
 function loadDb(force) {
   if (dbPromise && !force) return dbPromise;
   dbPromise = (async () => {
@@ -1084,6 +1118,7 @@ function loadDb(force) {
       net = buildNet(cached.db);
       dbInfo = { how: '使用手機暫存（' + new Date(cached.t).toLocaleDateString('zh-HK') + ' 下載）', ctbErr: '' };
       setProg('');
+      if (!cached.chk || Date.now() - cached.chk > 864e5) setTimeout(() => updateRoutes(() => {}).catch(() => {}), 8000);   // 每日在背景檢查一次
       return net;
     }
     try {
@@ -1094,7 +1129,7 @@ function loadDb(force) {
       const db = mergeDb(k, c.db);
       net = buildNet(db);
       dbInfo = { how: '剛從官方介面下載', ctbErr };
-      if (c.ok) { try { await idbSet('db2', { t: Date.now(), db, sig: await routeSig().catch(() => null) }); } catch (e) { /* 存不了也沒關係 */ } }
+      if (c.ok) { try { await idbSet('db2', { t: Date.now(), db, sig: await routeSig().catch(() => null), chk: Date.now() }); } catch (e) { /* 存不了也沒關係 */ } }
       setProg('');
       return net;
     } catch (e) {
@@ -1424,7 +1459,7 @@ async function runSearch(boost) {
   const boostRange = boost === true;   // 注意：按鈕點擊也會傳進一個事件，所以要明確等於 true 才算
 
   const go = $('#go'); go.disabled = true; openBox(); progStart();
-  const T0 = performance.now(); tmLog = []; const tm = l => tmLog.push(l + '：' + ((performance.now() - T0) / 1000).toFixed(1) + ' 秒');
+  schedUsed = 0; const T0 = performance.now(); tmLog = []; const tm = l => tmLog.push(l + '：' + ((performance.now() - T0) / 1000).toFixed(1) + ' 秒');
   $('#selInfo').innerHTML = '';
   $('#results').innerHTML = '<div class="grp g-d">直達</div><div class="skel"></div><div class="skel"></div><div class="grp g-t">轉乘</div><div class="skel"></div><div class="skel"></div>';   // 骨架屏：搜索期間先顯示結果頁的輪廓
   setView('results'); $('#sum').classList.add('pulse');
@@ -1750,7 +1785,7 @@ async function runSearch(boost) {
         return Ls.map(l => l.r.route).join('→') + '（' + rnd(x.ev) + ' 分鐘）：' + segs.map(([nm, a, b]) => { const m = pedCache.get(pedKey(a, b)); return nm + ' ' + (m !== undefined ? '真實 ' + Math.round(m) + ' 米' : '估算 ' + Math.round(hav(a.lat, a.lng, b.lat, b.lng)) + ' 米(直線)'); }).join('；');
       });
     }
-    tm('全部完成');
+    tm('全部完成（時間表推算班次用了 ' + schedUsed + ' 次）');
     show(true);
     if (!boostRange && !D.length && !T.length) { toast('附近沒有合適的班次，擴大範圍再找一次…'); await runSearch(true); }
   } catch (e) {
@@ -1809,11 +1844,11 @@ function applyJourneyTimes() {
 }
 /* ---------- 分段車費：hkbus 項目整理的「每個上車站的車費」（志願者維護的第三方資料，站編號與官方到站接口相同）---------- */
 const SEC_URLS = ['https://hkbus.github.io/hk-bus-crawling/routeFareList.min.json', 'https://data.hkbus.app/routeFareList.min.json'];
-let secMap = null, secPromise = null;
+let secMap = null, secHol = null, secPromise = null, schedUsed = 0;
 function loadSection() {
   if (secPromise) return secPromise;
   secPromise = (async () => {
-    try { const c = await idbGet('fare_sec2'); if (c && c.s && Date.now() - c.t < 3 * 864e5) { secMap = new Map(c.s); return secMap; } } catch (e) { /* 沒有暫存也沒關係 */ }
+    try { const c = await idbGet('fare_sec3'); if (c && c.s && Date.now() - c.t < 3 * 864e5) { secMap = new Map(c.s); secHol = new Set(c.hol || []); return secMap; } } catch (e) { /* 沒有暫存也沒關係 */ }
     let j = null, err = null;
     for (const u of SEC_URLS) { try { j = await getJSON(u, 240000, 1); break; } catch (e) { err = e; } }
     if (!j) throw err || new Error('讀不到分段車費資料');
@@ -1826,12 +1861,15 @@ function loadSection() {
         if (!st || !st.length || !b) continue;
         const k = c + '|' + e.route + '|' + b, arr = m.get(k) || [];
         const hm = t => (+String(t).slice(0, 2)) * 60 + (+String(t).slice(2, 4)), q = [], seenQ = new Set();
-        if (e.freq) for (const day of Object.values(e.freq)) for (const [t0, v] of Object.entries(day)) { const s0 = hm(t0), e0 = hm(v[0]), w = [s0, e0 <= s0 ? e0 + 1440 : e0], kq = w.join('-'); if (!seenQ.has(kq)) { seenQ.add(kq); q.push(w); } }
+        if (e.freq) for (const [code, day] of Object.entries(e.freq)) for (const [t0, v] of Object.entries(day)) {   // 日子代碼是位元：1＝星期一 … 64＝星期日、128＝公眾假期
+          const s0 = hm(t0), e0 = hm(v[0]), hw = +v[1] > 0 ? +v[1] : 0, w = [+code, s0, e0 <= s0 ? e0 + 1440 : e0, hw], kq = w.join('-');
+          if (!seenQ.has(kq)) { seenQ.add(kq); q.push(w); }
+        }
         arr.push({ n: st.length, a: st[0], z: st[st.length - 1], f: hasF ? e.fares.map(Number) : [], q }); m.set(k, arr);
       }
     }
-    secMap = m;
-    try { await idbSet('fare_sec2', { t: Date.now(), s: [...m] }); } catch (e) { /* 存不了也沒關係 */ }
+    secMap = m; secHol = new Set((j.holidays || []).map(String));
+    try { await idbSet('fare_sec3', { t: Date.now(), s: [...m], hol: [...secHol] }); } catch (e) { /* 存不了也沒關係 */ }
     return m;
   })();
   secPromise.catch(() => { secPromise = null; });
@@ -1846,14 +1884,41 @@ function secFare(r, i) {
   return v && v.f[i] > 0 ? v.f[i] : null;
 }
 /* 這條路線在 nowMin 分鐘（當日 0 時起計）前後有沒有服務：現在服務中，或 horizon 分鐘內即將開出。查不到資料就當作有服務 */
-function routeActive(r, nowMin, horizon) {
-  if (!secMap) return true;
+/* 今天對應的日子代碼位元（凌晨 0 至 6 時再加上昨天，因為通宵路線算前一天的服務） */
+function dayBits(nowMs) {
+  const bitOf = d => (secHol && secHol.has(String(d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate()))) ? 192 : 1 << ((d.getDay() + 6) % 7);
+  const d = new Date(nowMs); let bits = bitOf(d);
+  if (d.getHours() < 6) bits |= bitOf(new Date(nowMs - 864e5));
+  return bits;
+}
+function routeWindows(r) {
+  if (!secMap) return null;
   const c = r.co[0], arr = secMap.get(c + '|' + r.route + '|' + (r.bound && r.bound[c]));
-  if (!arr) return true;
+  if (!arr) return null;
   const n = r.stops.length, v = arr.find(x => x.n === n && x.a === r.stops[0] && x.z === r.stops[n - 1]);
-  if (!v || !v.q || !v.q.length) return true;
-  for (const [s0, e0] of v.q) for (const off of [-1440, 0, 1440]) if (s0 + off <= nowMin + horizon && e0 + off >= nowMin - 10) return true;
+  if (!v || !v.q || !v.q.length) return null;
+  const w = v.q.filter(x => x[0] & dayBits(Date.now()));
+  return w.length ? w : v.q;   // 日子代碼對不上時，就用全部時段
+}
+/* 這條路線在 nowMin 分鐘（當日 0 時起計）前後有沒有服務：現在服務中，或 horizon 分鐘內即將開出。查不到資料就當作有服務 */
+function routeActive(r, nowMin, horizon) {
+  const q = routeWindows(r); if (!q) return true;
+  for (const [, s0, e0] of q) for (const off of [-1440, 0, 1440]) if (s0 + off <= nowMin + horizon && e0 + off >= nowMin - 10) return true;
   return false;
+}
+/* 時間表推算：實時預報查不到（例如午夜還沒開出的首班車）時，用路線的首班時間和班距，推算這個站的接下來幾班車 */
+function schedList(r, p, nowMs) {
+  const q = routeWindows(r); if (!q) return null;
+  const dt = new Date(nowMs), mid = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).getTime(), off = ((r.cum && r.cum[p]) || 0) * 1000, out = [];
+  for (const [, s0, e0, hw0] of q) {
+    const hw = (hw0 >= 60 ? hw0 : 600) * 1000;
+    for (const dOff of [-1440, 0, 1440]) {
+      const start = mid + (s0 + dOff) * 60000, end = mid + (e0 + dOff) * 60000;
+      if (end + off < nowMs - 60000 || start + off > nowMs + 3 * 3600000) continue;
+      for (let t = start; t <= end && out.length < 80; t += hw) { const tt = t + off; if (tt >= nowMs - 60000 && tt <= nowMs + 3 * 3600000) out.push({ t: tt, rmk: '原定班次（按時間表推算）', src: 'sched' }); }
+    }
+  }
+  return out.sort((x, y) => x.t - y.t).slice(0, 3);
 }
 function fareOf(r, i) {
   const sf = secFare(r, i);
@@ -2145,6 +2210,103 @@ async function loadSpeeds() {
   speedMap = m; speedAt = Date.now(); return m;
 }
 /* 查看方案時：把直線換成沿道路的路線，並把途經的緩慢、擠塞路段用流動光線標出 */
+/* ---------- 官方巴士路線形狀（運輸署，空間數據共享平台 FB_ROUTE_LINE）----------
+   做法：先下載一次「路線對照」（路線號＋方向 → 形狀編號，約 400 KB，存在手機），
+   查看方案時才向官方要那幾條路線的形狀（每條約 30 KB，也存在手機）。
+   把路線所有的站，按次序貼到形狀上（整條路線總距離最短），再裁切上下車站之間的一段。 */
+const BUS_WFS = 'https://portal.csdi.gov.hk/server/services/common/td_rcd_1638844988873_41214/MapServer/WFSServer';
+const BUS_Q = '?service=WFS&version=2.0.0&request=GetFeature&typeNames=csdi:FB_ROUTE_LINE&outputFormat=GEOJSON&srsName=EPSG:4326';
+let rlPromise = null; const routeGeoMem = new Map(), routeMatch = new Map();
+function loadRouteIndex() {
+  if (rlPromise) return rlPromise;
+  rlPromise = (async () => {
+    try { const c = await idbGet('rl_idx1'); if (c && c.m && Date.now() - c.t < 14 * 864e5) return new Map(c.m); } catch (e) { /* 沒有暫存也沒關係 */ }
+    const g = await getJSON(BUS_WFS + BUS_Q + '&propertyName=ROUTE_ID,ROUTE_SEQ,COMPANY_CODE,ROUTE_NAMEE', 90000, 1);
+    const m = new Map();
+    for (const f of (g.features || [])) {
+      const p = f.properties || {}, gid = p.GmlID || f.id; if (!gid) continue;
+      for (const co of String(p.COMPANY_CODE || '').split('+')) {
+        const c = (co === 'KMB' || co === 'LWB') ? 'kmb' : co === 'CTB' ? 'ctb' : null; if (!c) continue;
+        const k = c + '|' + p.ROUTE_NAMEE + '|' + (+p.ROUTE_SEQ), a = m.get(k) || []; a.push(gid); m.set(k, a);
+      }
+    }
+    try { await idbSet('rl_idx1', { t: Date.now(), m: [...m] }); } catch (e) { /* 存不了也沒關係 */ }
+    return m;
+  })();
+  rlPromise.catch(() => { rlPromise = null; });
+  return rlPromise;
+}
+async function routeGeo(gid) {
+  if (routeGeoMem.has(gid)) return routeGeoMem.get(gid);
+  try { const c = await idbGet('rg:' + gid); if (c && c.c) { routeGeoMem.set(gid, c.c); return c.c; } } catch (e) { /* 忽略 */ }
+  const g = await getJSON(BUS_WFS + BUS_Q + '&resourceId=' + encodeURIComponent(gid), 30000, 1);
+  const f = g.features && g.features[0]; if (!f || !f.geometry) return null;
+  const lines = f.geometry.type === 'MultiLineString' ? f.geometry.coordinates : [f.geometry.coordinates];
+  const coords = lines.flat().map(p => [p[1], p[0]]);
+  routeGeoMem.set(gid, coords);
+  try { await idbSet('rg:' + gid, { t: Date.now(), c: coords }); } catch (e) { /* 忽略 */ }
+  return coords;
+}
+function densify(c, maxM) {   // 讓形狀上每兩個點相距不超過 maxM 米，貼站時才準確
+  const out = [c[0]];
+  for (let i = 1; i < c.length; i++) {
+    const a = c[i - 1], b = c[i], n = Math.max(1, Math.ceil(hav(a[0], a[1], b[0], b[1]) / maxM));
+    for (let k = 1; k <= n; k++) out.push(k === n ? b : [a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n]);
+  }
+  return out;
+}
+/* 把路線的站依次貼到形狀的點上：站與站的先後次序不能倒轉，總距離最短（動態規劃）。傳回每個站對應的點位置和平均距離 */
+function matchStops(nt, r, coords) {
+  const P = r.stops.map(id => nt.stops.get(id)), ks = []; P.forEach((p, k) => { if (p) ks.push(k); });
+  const m = coords.length; if (m < 2 || ks.length < 2) return null;
+  const kx = 111320 * Math.cos(P[ks[0]].lat * Math.PI / 180), ky = 111320, args = [];
+  let prefPrev = null;
+  for (const k of ks) {
+    const p = P[k], cost = new Float64Array(m);
+    for (let v = 0; v < m; v++) { const dx = (coords[v][1] - p.lng) * kx, dy = (coords[v][0] - p.lat) * ky; cost[v] = Math.sqrt(dx * dx + dy * dy) + (prefPrev ? prefPrev[v] : 0); }
+    const pref = new Float64Array(m), arg = new Int32Array(m); let best = Infinity, bi = 0;
+    for (let v = 0; v < m; v++) { if (cost[v] < best) { best = cost[v]; bi = v; } pref[v] = best; arg[v] = bi; }
+    args.push(arg); prefPrev = pref;
+  }
+  const pos = new Array(r.stops.length); let v = args[args.length - 1][m - 1];
+  for (let t = ks.length - 1; t >= 0; t--) { pos[ks[t]] = v; if (t > 0) v = args[t - 1][v]; }
+  let sum = 0; for (const k of ks) sum += hav(P[k].lat, P[k].lng, coords[pos[k]][0], coords[pos[k]][1]);
+  return { pos, avg: sum / ks.length };
+}
+const brg = (a, b) => Math.atan2((b[1] - a[1]) * Math.cos(a[0] * Math.PI / 180), b[0] - a[0]) * 180 / Math.PI;
+const angDiff = (x, y) => Math.abs(((x - y + 540) % 360) - 180);
+/* 這一小段路線屬於哪條道路中線：在 20 米內、行車方向一致的道路 */
+function ridAt(a, b) {
+  const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], pb = brg(a, b);
+  for (const c of RoadNet.snapK(mid[0], mid[1], 20, 4)) {
+    const e = c.e, oneWay = e.dir === 2 || e.dir === 3, eb = brg([e.p[1], e.p[0]], [e.q[1], e.q[0]]) + (e.dir === 3 ? 180 : 0), d = angDiff(pb, eb);
+    if (oneWay ? d <= 50 : (d <= 50 || d >= 130)) return e.rid;
+  }
+  return null;
+}
+async function routeLegOfficial(leg, P, nt) {
+  try {
+    const r = leg.r, idx = await loadRouteIndex(), seq = r.bound[r.co[0]] === 'I' ? 2 : 1;
+    let m = routeMatch.get(r.id);
+    if (m === undefined) {
+      const cands = idx.get(r.co[0] + '|' + r.route + '|' + seq) || []; let best = null;
+      for (const gid of cands.slice(0, 4)) {
+        const geo = await routeGeo(gid); if (!geo) continue;
+        const dense = densify(geo, 30), mt = matchStops(nt, r, dense);
+        if (mt && (!best || mt.avg < best.avg)) best = { dense, pos: mt.pos, avg: mt.avg };
+      }
+      m = best && best.avg <= 150 ? best : false; routeMatch.set(r.id, m);
+    }
+    if (!m) return null;
+    const a = m.pos[leg.i], b = m.pos[leg.j];
+    if (a === undefined || b === undefined || b <= a) return null;
+    const coords = m.dense.slice(a, b + 1);
+    await ensureRoadTiles([coords.filter((_, i) => i % 10 === 0).map(c => ({ lat: c[0], lng: c[1] }))]);   // 載入沿途的道路中線，用來對應車速
+    const segs = [];
+    for (let q = 1; q < coords.length; q++) segs.push({ rid: ridAt(coords[q - 1], coords[q]), a: coords[q - 1], b: coords[q] });
+    return { coords, segs, ok: 1, total: 1 };
+  } catch (e) { return null; }
+}
 async function drawRoad(idx, legs, nt, legLines) {
   try {
     const pts = legs.map(l => l.r.stops.slice(l.i, l.j + 1).map(id => nt.stops.get(id)));
@@ -2152,12 +2314,14 @@ async function drawRoad(idx, legs, nt, legLines) {
     const speedsP = loadSpeeds().catch(() => null);   // 車速和道路同時查
     let results = roadCache.get(ckey);
     if (!results) {
-    await ensureRoadTiles(pts);
-    if (selectedIdx !== idx) return;
     results = [];
     for (let k = 0; k < legs.length; k++) {
-      let res = await routeLegTdas(pts[k]), src = '政府駕駛路線';             // 1. 政府駕駛路線服務
-      if (res.ok < Math.ceil(res.total * 0.5)) { res = routeLeg(pts[k]); src = res.ok ? '自行計算' : '直線'; }   // 2. 要不到：用道路中線自己計算
+      let res = await routeLegOfficial(legs[k], pts[k], nt), src = '官方路線形狀';   // 1. 運輸署官方的巴士路線形狀
+      if (!res) {
+        await ensureRoadTiles([pts[k]]);
+        res = await routeLegTdas(pts[k]); src = '政府駕駛路線';                      // 2. 政府駕駛路線服務
+        if (res.ok < Math.ceil(res.total * 0.5)) { res = routeLeg(pts[k]); src = res.ok ? '自行計算' : '直線'; }   // 3. 用道路中線自己計算
+      }
       setStatus(`第 ${k + 1} 程路線來源：${src}（貼路 ${res.ok}／${res.total}；政府服務累計成功 ${tdasOk} 次、失敗 ${tdasDead} 次）`);
       res.coords = despur(res.coords);
       results.push({ res, col: LEG_COLORS[k % LEG_COLORS.length], k });
