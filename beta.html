@@ -2,7 +2,7 @@
 <html lang="zh-HK">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#10171d">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -222,6 +222,13 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 .res .rt[data-k]{text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:3px;box-shadow:none}
 .jamtag{position:absolute;transform:translate(-50%,14px);white-space:nowrap;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:600;color:#fff;background:rgba(12,20,31,.88);border-left:3px solid #ffd60a;pointer-events:none}
 .jamtag.r{border-left-color:#ff3b30}
+#homeBox input[type=text],#routePanel input{font-size:16px}
+#homeBox.open{top:calc(var(--vvt,0px) + max(70px,calc(env(safe-area-inset-top) + 64px)))}
+.res .sub.walk{color:var(--muted);font-size:13px;margin-top:6px}
+#routePanel{position:fixed;z-index:3500;left:12px;right:12px;top:max(66px,calc(env(safe-area-inset-top) + 58px));max-width:440px;margin:0 auto;max-height:calc(var(--vh,100vh) - 96px);overflow:auto;border-radius:18px;border:1px solid rgba(39,211,176,.3);background:rgba(12,20,31,.97);padding:14px;box-shadow:0 8px 30px rgba(0,0,0,.55)}
+#routePanel .hrow input{flex:1;min-width:0;background:rgba(255,255,255,.06);border:1px solid var(--line);color:var(--fg);border-radius:20px;padding:9px 14px}
+.rpitem{display:block;width:100%;text-align:left;margin:6px 0;white-space:normal}
+.rpitem small{color:var(--muted);margin-left:6px}
 </style>
 </head>
 <body data-view="home">
@@ -232,7 +239,7 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 </div>
 <div id="envWarn" class="banner" hidden style="position:fixed;z-index:1300;left:12px;right:12px;top:70px"></div>
 <button type="button" class="fab" id="btnSet" aria-label="設定">⚙</button>
-<div class="brand">追巴士<span class="ver">v17</span></div>
+<div class="brand">追巴士<span class="ver">v17.1</span></div>
 <button type="button" class="fab" id="locate" aria-label="回到目前位置">◎</button>
 
 <div id="homeBox">
@@ -243,7 +250,7 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
   <div class="hrow"><div class="inp"><input id="qD" type="text" placeholder="今日想去邊？" autocomplete="off" enterkeyhint="search" aria-label="終點"><button type="button" class="x" id="xD" aria-label="清除終點內容" hidden>×</button></div><button type="button" class="b mapbtn" id="mapD">地圖選點</button></div>
   <ul class="sugg" id="suD" hidden></ul>
   <div class="more">
-    <div class="hrow"><button type="button" class="ib" id="swap" title="起終點互換" aria-label="起終點互換">⇅</button><button type="button" class="primary" id="go" disabled style="flex:1">搵巴士</button></div>
+    <div class="hrow"><button type="button" class="ib" id="swap" title="起終點互換" aria-label="起終點互換">⇅</button><button type="button" class="primary" id="go" disabled style="flex:1">搵巴士</button><button type="button" class="b" id="goRoute" style="flex:0 0 auto">查巴士</button></div>
     <div class="prog" id="prog" hidden><i></i></div>
   </div>
 </div>
@@ -256,12 +263,17 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 </section>
 
 <div id="settingsMask" hidden></div>
+<div id="routePanel" hidden>
+  <div class="sumrow"><b style="flex:1;font-size:16px">查巴士</b><button type="button" class="b" id="rpClose" aria-label="關閉">✕</button></div>
+  <div class="hrow" style="margin-top:10px"><input id="rq" type="text" autocapitalize="characters" autocomplete="off" enterkeyhint="search" placeholder="輸入路線號，例如 N8、296C"><button type="button" class="b" id="rqGo">查</button></div>
+  <div id="rpList"></div>
+</div>
 <aside id="settings" hidden>
   <div class="sumrow"><b style="flex:1;font-size:16px">設定</b><button type="button" class="b" id="setClose" aria-label="關閉">✕</button></div>
   <div class="setitem"><button type="button" class="b" id="chkRoutes" style="width:100%">檢查路線資料</button><p class="hint" id="dbStat"></p></div>
   <div class="setitem"><b>關於追巴士</b><p class="hint">By Frankie</p></div>
   <div id="dbgBox" hidden>
-    <div class="card"><b>測試專用（只有創作者網址顯示）</b>
+    <div class="card"><b>測試專用（只有創作者網址顯示）</b><p class="hint" id="secStat"></p>
     <b>資料測試</b>
     <p class="hint">檢查程式能不能讀到巴士路線和到站資料。按開始測試，完成後按「複製結果」。</p>
     <div class="row"><button class="b primary" id="runDiag" style="width:auto">開始測試</button><button class="b" id="copyDiag">複製結果</button></div>
@@ -308,7 +320,7 @@ const PED = 'https://mapapi.hkmapservice.gov.hk/PedRoute/NAServer/route/';
 const pedCache = new Map(), pedPath = new Map(); let pedMode = null, pedFails = 0, pedOk = 0;
 const DEBUG = /beta|debug/i.test(location.pathname) || /[?&]debug=1/.test(location.search);   // 只有創作者的測試網址才顯示資料測試與除錯檢查
 /* 參數：全部集中在這裏，方便測試時調整 */
-const SPEED = { rO: 400, rD: 700, trMin: 5, maxRides: 3, directN: 40, directKeys: 160, firstKeys: 100, chosenKeys: 300, extraPlans: 80, extraKeys: 500, suppKeys: 500, suppSpots: 999, originStops: 25, etaMs: 8000, phaseMs: 10000, walkMs: 3500, refineN: 12, beam: 150, merge: 1, spec: 0, budgetMs: 6000, hubs: 1, nocache: 0, sched: 1, op: 1, opHorizon: 75, shiftN: 12, shiftKeys: 120 };
+const SPEED = { rO: 400, rD: 700, trMin: 5, maxRides: 3, directN: 40, directKeys: 160, firstKeys: 100, chosenKeys: 300, extraPlans: 80, extraKeys: 500, suppKeys: 500, suppSpots: 999, originStops: 25, etaMs: 8000, phaseMs: 10000, walkMs: 3500, refineN: 12, beam: 150, merge: 1, spec: 0, budgetMs: 6000, hubs: 1, nocache: 0, sched: 1, op: 1, nightSlack: 30, opHorizon: 75, shiftN: 12, shiftKeys: 120 };
 { const q = new URLSearchParams(location.search); for (const k of Object.keys(SPEED)) if (q.has(k) && isFinite(+q.get(k))) SPEED[k] = +q.get(k); }   // 測試用：網址後面加 ?rides=… 之類可以覆蓋（例如 ?maxRides=3&merge=0）
 const pedKey = (a, b) => a.lat.toFixed(5) + ',' + a.lng.toFixed(5) + '|' + b.lat.toFixed(5) + ',' + b.lng.toFixed(5);
 function realMin(a, b, fbM, transfer) {
@@ -1459,7 +1471,7 @@ async function runSearch(boost) {
   const boostRange = boost === true;   // 注意：按鈕點擊也會傳進一個事件，所以要明確等於 true 才算
 
   const go = $('#go'); go.disabled = true; openBox(); progStart();
-  schedUsed = 0; const T0 = performance.now(); tmLog = []; const tm = l => tmLog.push(l + '：' + ((performance.now() - T0) / 1000).toFixed(1) + ' 秒');
+  schedUsed = 0; traceLog = []; const traceName = DEBUG ? new URLSearchParams(location.search).get('trace') : null; const T0 = performance.now(); tmLog = []; const tm = l => tmLog.push(l + '：' + ((performance.now() - T0) / 1000).toFixed(1) + ' 秒');
   $('#selInfo').innerHTML = '';
   $('#results').innerHTML = '<div class="grp g-d">直達</div><div class="skel"></div><div class="skel"></div><div class="grp g-t">轉乘</div><div class="skel"></div><div class="skel"></div>';   // 骨架屏：搜索期間先顯示結果頁的輪廓
   setView('results'); $('#sum').classList.add('pulse');
@@ -1491,6 +1503,10 @@ async function runSearch(boost) {
     if (dbInfo && dbInfo.ctbErr) setStatus('注意：' + dbInfo.ctbErr + '，這次的結果可能缺少城巴路線。');
     await new Promise(r => setTimeout(r, 30));
     // 第一步：靜態計算所有可能的直達、轉乘一次、轉乘多次方案（還沒有用到實時資料）
+    if (SPEED.op && !secMap) {   // 班次資料還沒載入：最多等 2.5 秒
+      if (!secPromise) loadSection().catch(() => {});
+      await Promise.race([secPromise || Promise.resolve(), new Promise(r => setTimeout(r, 2500))]).catch(() => {});
+    }
     { // 靜態挑選只考慮服務中、或 opHorizon 分鐘內即將開出的路線（例如午夜只剩 N 字頭，和快將開出的首班車）
       const dt = new Date(), nowMin = dt.getHours() * 60 + dt.getMinutes();
       nt.inactive = new Uint8Array(nt.routes.length); let off = 0;
@@ -1574,7 +1590,7 @@ async function runSearch(boost) {
       const fastestD = D.find(x => rnd(x.ev) === bestD);
       smartSort(D);
       const T2 = T.filter(x => bestD === null || rnd(x.ev) < bestD);
-      if (T2.length) { const mT = Math.min(...T2.map(x => rnd(x.ev))); T2.splice(0, T2.length, ...T2.filter(x => rnd(x.ev) <= mT + 15)); } // 比最快的轉乘方案慢超過 15 分鐘就不顯示
+      if (T2.length) { const mT = Math.min(...T2.map(x => rnd(x.ev))), hn = new Date(), night = hn.getHours() < 5 || (hn.getHours() === 5 && hn.getMinutes() < 30); T2.splice(0, T2.length, ...T2.filter(x => rnd(x.ev) <= mT + (night ? SPEED.nightSlack : 15))); } // 比最快的轉乘方案慢超過 15 分鐘就不顯示
       smartSort(T2);
       { // 合併：轉乘次數相同、最後一程是同一班車（同一路線同一上車站）的方案併成一張卡片，其餘路線列在「也可乘」，並顯示各自的候車時間
         const gm = new Map(), grouped = [];
@@ -1785,6 +1801,28 @@ async function runSearch(boost) {
         return Ls.map(l => l.r.route).join('→') + '（' + rnd(x.ev) + ' 分鐘）：' + segs.map(([nm, a, b]) => { const m = pedCache.get(pedKey(a, b)); return nm + ' ' + (m !== undefined ? '真實 ' + Math.round(m) + ' 米' : '估算 ' + Math.round(hav(a.lat, a.lng, b.lat, b.lng)) + ' 米(直線)'); }).join('；');
       });
     }
+    if (traceName) {   // 追蹤某條路線為什麼找得到或找不到（網址加 ?trace=N8）
+      const nm = traceName.toUpperCase(), Lg = [], has = p => p.legs.some(l => l.r.route.toUpperCase() === nm), hm = m => Math.floor((m % 1440) / 60) + ':' + String(m % 60).padStart(2, '0');
+      const rs = nt.routes.filter(r => r.route.toUpperCase() === nm);
+      Lg.push(`班次時段資料：${secMap ? '已載入' : '還沒載入'}；路線 ${nm} 共 ${rs.length} 條方向`);
+      for (const r of rs.slice(0, 6)) {
+        const ri = nt.routes.indexOf(r), w = routeWindows(r), near = r.stops.map((id, i) => oNear.has(id) ? i : -1).filter(i => i >= 0), info = [];
+        info.push(`${isKmb(r) ? '九巴' : '城巴'} ${r.route} 往${r.dest}`);
+        info.push(w ? '時段 ' + w.slice(0, 4).map(x => `${hm(x[1])}–${hm(x[2])}／班距 ${Math.round(x[3] / 60)} 分`).join('、') : '沒有班次時段資料');
+        info.push(nt.inactive && nt.inactive[ri] ? '被當成停駛而略過' : '視為服務中');
+        info.push(near.length ? `起點範圍內有 ${near.length} 個站` : '起點範圍內沒有站');
+        if (near.length) {
+          const i0 = near[0], raw = etaAtRaw(r, i0, store), l = etaAt(r, i0, store);
+          info.push(raw === null ? '這個站沒有查過班次' : raw.length ? `實時預報 ${raw.length} 班` : '查過但沒有實時預報');
+          info.push(l && l.length ? '用於計算的班次：' + l.map(x => new Date(x.t).toTimeString().slice(0, 5) + (x.src === 'sched' ? '(時間表)' : '')).join(' ') : '沒有可用班次');
+        }
+        Lg.push(info.join('；'));
+      }
+      Lg.push(`靜態找到含此路線的方案：直達 ${dAll.filter(has).length} 個、轉乘 ${others.filter(has).length} 個；進入第一批查詢的轉乘方案 ${chosen.filter(has).length} 個`);
+      chosen.filter(has).slice(0, 4).forEach(p => { const ev = evalPlan(p, ctx); Lg.push('評估：' + p.legs.map(l => l.r.route).join('→') + (ev.drop ? '：被捨棄（' + ev.drop + '）' : '：' + rnd(ev) + ' 分鐘')); });
+      Lg.push(`規則過濾後，轉乘名單含此路線 ${T.filter(x => has(x.plan)).length} 個、直達名單含此路線 ${D.filter(x => has(x.plan)).length} 個`);
+      traceLog = Lg;
+    }
     tm('全部完成（時間表推算班次用了 ' + schedUsed + ' 次）');
     show(true);
     if (!boostRange && !D.length && !T.length) { toast('附近沒有合適的班次，擴大範圍再找一次…'); await runSearch(true); }
@@ -1844,7 +1882,7 @@ function applyJourneyTimes() {
 }
 /* ---------- 分段車費：hkbus 項目整理的「每個上車站的車費」（志願者維護的第三方資料，站編號與官方到站接口相同）---------- */
 const SEC_URLS = ['https://hkbus.github.io/hk-bus-crawling/routeFareList.min.json', 'https://data.hkbus.app/routeFareList.min.json'];
-let secMap = null, secHol = null, secPromise = null, schedUsed = 0;
+let secMap = null, secHol = null, secPromise = null, schedUsed = 0, secStatus = '班次資料：尚未開始', traceLog = [];
 function loadSection() {
   if (secPromise) return secPromise;
   secPromise = (async () => {
@@ -1938,30 +1976,28 @@ function renderResults() {
   const card = ({ ev, plan, tag, alts }, idx) => {
     const first = ev.legs[0], nt = searchState.net;
     const mins = Math.max(1, Math.round(ev.totalSec / 60));
-    const fl = ev.walkO > 0 ? [`步行 ${ev.walkO} 分`] : [];
-    ev.legs.forEach((l, k) => { fl.push(rtBadge(l.r, k)); if (l.walkAfter > 0) fl.push(`步行 ${l.walkAfter} 分`); });
-    const flow = fl.join(' → ');
-    const detail = ev.legs.map((l, k) => {
+    const walkTxt = m => `<div class="sub walk">步行 ${m} 分</div>`;
+    const detail = (ev.walkO > 0 ? walkTxt(ev.walkO) : '') + ev.legs.map((l, k) => {
       const bs = nt.stops.get(l.r.stops[l.i]), as = nt.stops.get(l.r.stops[l.j]);
       const sched = l.board.rmk && l.board.rmk.indexOf('原定') >= 0;
       const w = Math.max(0, Math.round(l.wait / 60000));
-      return (k > 0 ? `<div class="sub trw">轉乘 <b>${esc(l.r.route)}</b> · 等 <span class="wt ${w < 5 ? 'y' : 'g'}">${w} 分鐘</span>${sched ? ' · 原定班次' : ''}</div>` : '') +
-        `<div class="sub leg">${rtBadge(l.r, k)}<span class="tstop">${esc(bs.name)}</span><span class="arrw">→<small>${l.nStops} 站</small></span><span class="${k < ev.legs.length - 1 ? 'tstop' : 'stp'}">${esc(as.name)}</span></div>`;
+      return (k > 0 ? `<div class="sub trw">轉乘 <b>${esc(l.r.route)}</b>${ev.legs[k - 1].walkAfter > 0 ? ' · 步行 ' + ev.legs[k - 1].walkAfter + ' 分' : ''} · 等 <span class="wt ${w < 5 ? 'y' : 'g'}">${w} 分鐘</span>${sched ? ' · 原定班次' : ''}</div>` : '') +
+        `<div class="sub leg">${rtBadge(l.r, k)}<span class="tstop">${esc(bs.name)}</span><span class="arrw">→<small>${l.nStops} 站</small></span><span class="${k < ev.legs.length - 1 ? 'tstop' : 'stp'}">${esc(as.name)}</span></div>` + (k === ev.legs.length - 1 && l.walkAfter > 0 ? walkTxt(l.walkAfter) : '');
     }).join('') + ((alts && alts.length) ? `<div class="sub alts"><b>也可乘</b>${alts.map((a, ai) => '<div>' + a.ev.legs.map((l, kk) => { const w = Math.max(0, Math.round(l.wait / 60000)); return rtBadge(l.r, kk, ai) + ' <span class="wt ' + (w < 5 ? 'y' : 'g') + '">' + w + ' 分</span>' + (l.board.rmk && l.board.rmk.indexOf('原定') >= 0 ? '（原定班次）' : ''); }).join(' → ') + '，約 ' + Math.max(1, Math.round(a.ev.totalSec / 60)) + ' 分鐘</div>').join('')}</div>` : '');
     return `<div class="res" role="button" tabindex="0" data-idx="${idx}" aria-selected="${idx === selectedIdx}">
       <div class="top"><div class="tot">約 <b>${mins}</b> 分鐘${ev.transfers ? (tag ? '' : `<span class="tag">轉${ev.transfers}次車</span>`) : ''}${tag ? `<span class="tag good${ev.transfers ? ' sm' : ''}">${esc(tag)}</span>` : ''}${ev.est ? '<span class="tag warn">含估算</span>' : ''}</div>
       <div class="fare">${fareTxt(ev, plan)}</div><div class="nx">下一班 ${etaPill(first.nextMin)}${first.next2Min != null ? ' <span class="nx2">再下一班 ' + minTxt(first.next2Min) + '</span>' : ''}</div></div>
-      <div class="line">${flow}</div>${detail}</div>`;
+      ${detail}</div>`;
   };
   const dHtml = current.slice(0, shownD).map((x, k) => card(x, k)).join('');
   const tHtml = current.slice(nDirect, nDirect + shownT).map((x, k) => card(x, nDirect + k)).join('');
   const rest = (nDirect - shownD) + ((current.length - nDirect) - shownT);
   box.innerHTML =
-    (!current.length ? '<div class="grp">沒有找到合適的方案，可以放寬搜索範圍再試。</div>' : '') +
+    (!current.length ? '<div class="grp">沒有找到合適的方案。</div>' : '') +
     (nDirect ? `<div class="grp g-d">直達</div>` + dHtml : '') +
     (current.length > nDirect ? `<div class="grp g-t">轉乘</div>` + tHtml : '') +
     (rest > 0 ? `<button class="b" id="more" style="width:100%">顯示更多（還有 ${rest} 個）</button>` : '') +
-    (DEBUG ? `<details class="dbg"><summary>除錯檢查</summary><div>起終點附近靜態找到 ${directReport.length} 個直達方案</div>${tmLog.map(x => '<div>⏱ ' + esc(x) + '</div>').join('')}${walkLog.map(x => '<div>🚶 ' + esc(x) + '</div>').join('')}${statusLog.slice(-14).map(x => '<div>' + esc(x) + '</div>').join('')}<div>${esc(chaseInfo)}</div>${dbgPlans.map(x => '<div>' + esc(x) + '</div>').join('')}${directReport.length ? directReport.map(x => '<div>' + esc(x) + '</div>').join('') : '<div>找不到任何直達路線：起點和終點附近沒有同一條路線經過。</div>'}</details>` : '');
+    (DEBUG ? `<details class="dbg"><summary>除錯檢查</summary><div>起終點附近靜態找到 ${directReport.length} 個直達方案</div>${tmLog.map(x => '<div>⏱ ' + esc(x) + '</div>').join('')}${walkLog.map(x => '<div>🚶 ' + esc(x) + '</div>').join('')}${traceLog.map(x => '<div>🔎 ' + esc(x) + '</div>').join('')}${statusLog.slice(-14).map(x => '<div>' + esc(x) + '</div>').join('')}<div>${esc(chaseInfo)}</div>${dbgPlans.map(x => '<div>' + esc(x) + '</div>').join('')}${directReport.length ? directReport.map(x => '<div>' + esc(x) + '</div>').join('') : '<div>找不到任何直達路線：起點和終點附近沒有同一條路線經過。</div>'}</details>` : '');
   const more = $('#more');
   if (more) more.onclick = () => { shownD = Math.min(nDirect, shownD + 5); shownT = Math.min(current.length - nDirect, shownT + 10); renderResults(); };
 }
@@ -2416,11 +2452,12 @@ async function selectResult(idx) {
 
 /* ---------- 點巴士號碼牌：查看該路線在上車站的實時到站 ---------- */
 let etaCtx = null;
-let etaLast = 0;
+let etaLast = 0, etaLastKey = '';
 async function loadEta() {
   if (!etaCtx) return;
-  if (Date.now() - etaLast < 4000) { toast('請稍等幾秒再刷新，避免查詢太頻密'); return; }
-  etaLast = Date.now();
+  const ek = etaCtx.r.id + '|' + etaCtx.i;
+  if (ek === etaLastKey && Date.now() - etaLast < 4000) { toast('請稍等幾秒再刷新，避免查詢太頻密'); return; }
+  etaLast = Date.now(); etaLastKey = ek;
   const { r, i, nt } = etaCtx;
   $('#etaTitle').innerHTML = rtBadge(r) + ' 往' + esc(r.dest) + '<div class="hint" style="font-weight:400">' + esc(nt.stops.get(r.stops[i]).name) + '</div>';
   $('#etaBody').textContent = '查詢中…';
@@ -2746,9 +2783,9 @@ function cmpStart() {
   cmpTimer = setTimeout(cmpStop, 90000);
 }
 $('#cmpTest').onclick = () => { if (cmpOn) cmpStop(); else cmpStart(); };
-$('#btnSet').onclick = () => { $('#settings').hidden = false; $('#settingsMask').hidden = false; $('#dbgBox').hidden = !DEBUG; };
+$('#btnSet').onclick = () => { $('#settings').hidden = false; $('#settingsMask').hidden = false; $('#dbgBox').hidden = !DEBUG; $('#secStat').textContent = secStatus; };
 $('#chkRoutes').onclick = checkRoutes;
-$('#settingsMask').onclick = () => { cmpStop(); $('#settings').hidden = true; $('#settingsMask').hidden = true; };
+$('#settingsMask').onclick = () => { cmpStop(); $('#settings').hidden = true; $('#routePanel').hidden = true; $('#settingsMask').hidden = true; };
 $('#setClose').onclick = () => { cmpStop(); $('#settings').hidden = true; $('#settingsMask').hidden = true; };
 $('#locate').onclick = async () => {
   if (navMarker) { map.setView(navMarker.getLatLng(), Math.max(map.getZoom(), 16)); return; }
@@ -2756,7 +2793,9 @@ $('#locate').onclick = async () => {
   catch (e) { toast('未能取得目前位置（' + e.message + '）'); }
 };
 $('#qD').addEventListener('focus', openBox);
-{ const setVh = () => document.documentElement.style.setProperty('--vh', (window.visualViewport ? visualViewport.height : innerHeight) + 'px'); setVh(); if (window.visualViewport) visualViewport.addEventListener('resize', setVh); }
+{ const setVh = () => { const v = window.visualViewport, st = document.documentElement.style; st.setProperty('--vh', (v ? v.height : innerHeight) + 'px'); st.setProperty('--vvt', (v ? v.offsetTop : 0) + 'px'); };   // iPhone：鍵盤彈出時，搜尋框跟着可見的畫面位置
+  setVh(); if (window.visualViewport) { visualViewport.addEventListener('resize', setVh); visualViewport.addEventListener('scroll', setVh); }
+  $('#qD').addEventListener('focus', () => setTimeout(() => { window.scrollTo(0, 0); setVh(); }, 50)); $('#qO').addEventListener('focus', () => setTimeout(() => { window.scrollTo(0, 0); setVh(); }, 50)); }
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 $('#fsBtn').onclick = () => {
   const toMap = document.body.dataset.view !== 'map';
@@ -2769,6 +2808,34 @@ $('#sum').onclick = () => setView('home');
   window.addEventListener('pointerup', e => { if (py === null) return; const dy = e.clientY - py; py = null; if (e.target.closest && e.target.closest('#peek') && (dy < -30 || Math.abs(dy) < 8)) setView('results'); });
 }
 $('#etaRef').onclick = loadEta;
+/* ---- 查巴士：輸入路線號 → 選方向 → 選車站看到站時間（附近的站排最前） ---- */
+async function rpSearch() {
+  const q = $('#rq').value.trim().toUpperCase(); if (!q) return;
+  $('#rpList').textContent = '查找中…';
+  try {
+    const nt = await loadDb();
+    let rs = nt.routes.filter(r => r.route.toUpperCase() === q);
+    if (!rs.length) rs = nt.routes.filter(r => r.route.toUpperCase().startsWith(q)).slice(0, 12);
+    $('#rpList').innerHTML = rs.length ? rs.map(r => `<button type="button" class="b rpitem" data-ri="${nt.routes.indexOf(r)}">${rtBadge(r)} 往${esc(r.dest)}<small>${esc(r.orig)} → ${esc(r.dest)}，${r.stops.length} 站</small></button>`).join('') : '找不到這條路線（只支援九巴、龍運、城巴）';
+  } catch (e) { $('#rpList').textContent = '查找失敗：' + e.message; }
+}
+async function rpShow(ri) {
+  const nt = await loadDb(), r = nt.routes[ri]; if (!r) return;
+  const ps = r.stops.map((id, i) => ({ i, s: nt.stops.get(id) })), me = pts.o;
+  const order = ps.filter(x => x.s).map(x => ({ ...x, d: me ? hav(me.lat, me.lng, x.s.lat, x.s.lng) : 0 }));
+  const near = me ? order.slice().sort((a, b) => a.d - b.d).slice(0, 3).map(x => x.i) : [];
+  $('#rpList').innerHTML = `<button type="button" class="b" id="rpBack">← 返回</button><div style="margin:8px 0">${rtBadge(r)} 往${esc(r.dest)}</div>` + (near.length ? '<div class="hint">離起點最近的站：</div>' + near.map(i => `<button type="button" class="b rpitem rpstop" data-i="${i}" data-ri="${ri}">${esc(nt.stops.get(r.stops[i]).name)}<small>第 ${i + 1} 站</small></button>`).join('') + '<div class="hint" style="margin-top:8px">全部車站：</div>' : '') + order.map(x => `<button type="button" class="b rpitem rpstop" data-i="${x.i}" data-ri="${ri}">${esc(x.s.name)}<small>第 ${x.i + 1} 站</small></button>`).join('');
+}
+$('#goRoute').onclick = () => { $('#routePanel').hidden = false; $('#settingsMask').hidden = false; setTimeout(() => $('#rq').focus(), 80); };
+$('#rpClose').onclick = () => { $('#routePanel').hidden = true; $('#settingsMask').hidden = true; };
+$('#rqGo').onclick = rpSearch;
+$('#rq').addEventListener('keydown', e => { if (e.key === 'Enter') rpSearch(); });
+$('#rpList').addEventListener('click', async e => {
+  const back = e.target.closest('#rpBack'); if (back) { rpSearch(); return; }
+  const st = e.target.closest('.rpstop');
+  if (st) { const nt = await loadDb(), r = nt.routes[+st.dataset.ri]; etaCtx = { r, i: +st.dataset.i, nt }; $('#etaBox').hidden = false; loadEta(); return; }
+  const it = e.target.closest('.rpitem'); if (it) rpShow(+it.dataset.ri);
+});
 $('#etaClose').onclick = () => { $('#etaBox').hidden = true; };
 { // 拖動結果面板的頂部：向上拉＝全屏結果，向下拉＝一半地圖；點一下摘要＝回到搜索
   let y0 = null;
@@ -2824,7 +2891,14 @@ syncX('o');
 useGpsAsOrigin(true).then(ok => { if (!ok && !pts.o) refreshGo(); });
 loadDb().catch(() => { /* 搜索時會再顯示錯誤 */ });
 loadPed().catch(() => { /* 沒有暫存也沒關係 */ });
-setTimeout(() => { const redraw = () => { try { if (current && current.length && searchState) renderResults(); } catch (e) { /* 忽略 */ } }; loadFares().then(() => { try { applyJourneyTimes(); } catch (e) { /* 忽略 */ } redraw(); }).catch(() => {}).then(() => loadSection()).then(redraw).catch(() => {}); }, 3000);
+setTimeout(() => {
+  const redraw = () => { try { if (current && current.length && searchState) renderResults(); } catch (e) { /* 忽略 */ } };
+  const tryLoad = async n => {   // 班次資料先載入（午夜和停駛判斷靠它），失敗就隔一會自動重試，最多 3 次
+    try { secStatus = '班次資料：載入中…'; await loadSection(); secStatus = '班次資料：已載入（' + (secMap ? secMap.size : 0) + ' 項）'; redraw(); }
+    catch (e) { secStatus = '班次資料：載入失敗（' + e.message + '）' + (n < 3 ? '，稍後自動重試' : ''); secPromise = null; if (n < 3) setTimeout(() => tryLoad(n + 1), 20000 * (n + 1)); }
+  };
+  tryLoad(0).then(() => loadFares()).then(() => { try { applyJourneyTimes(); } catch (e) { /* 忽略 */ } redraw(); }).catch(() => {});
+}, 1500);
 </script>
 </body>
 </html>
