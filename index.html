@@ -239,7 +239,7 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 </div>
 <div id="envWarn" class="banner" hidden style="position:fixed;z-index:1300;left:12px;right:12px;top:70px"></div>
 <button type="button" class="fab" id="btnSet" aria-label="設定">⚙</button>
-<div class="brand">追巴士<span class="ver">v17.1</span></div>
+<div class="brand">追巴士<span class="ver">v17.2</span></div>
 <button type="button" class="fab" id="locate" aria-label="回到目前位置">◎</button>
 
 <div id="homeBox">
@@ -1109,6 +1109,7 @@ async function updateRoutes(say) {
   const merged = { routes: k.routes.concat(keepC, nc.db.routes), stops: Object.assign({}, db.stops, k.stops, nc.db.stops) };
   net = buildNet(merged); dbPromise = Promise.resolve(net); dbInfo = { how: '剛更新路線資料', ctbErr: '' };
   await idbSet('db2', { t: Date.now(), db: merged, sig: nc.ok ? sig : cached.sig, chk: Date.now() });   // 城巴有路線沒更新成功，就保留舊指紋，下次再試
+  setProg('');
   return { changed: true, ctbChanged: changed.length, ctbRemoved: removed.size, ok: nc.ok };
 }
 
@@ -1899,8 +1900,11 @@ function loadSection() {
         if (!st || !st.length || !b) continue;
         const k = c + '|' + e.route + '|' + b, arr = m.get(k) || [];
         const hm = t => (+String(t).slice(0, 2)) * 60 + (+String(t).slice(2, 4)), q = [], seenQ = new Set();
-        if (e.freq) for (const [code, day] of Object.entries(e.freq)) for (const [t0, v] of Object.entries(day)) {   // 日子代碼是位元：1＝星期一 … 64＝星期日、128＝公眾假期
-          const s0 = hm(t0), e0 = hm(v[0]), hw = +v[1] > 0 ? +v[1] : 0, w = [+code, s0, e0 <= s0 ? e0 + 1440 : e0, hw], kq = w.join('-');
+        if (e.freq && typeof e.freq === 'object') for (const [code, day] of Object.entries(e.freq)) for (const [t0, v] of Object.entries(day && typeof day === 'object' ? day : {})) {   // 日子代碼是位元：1＝星期一 … 64＝星期日、128＝公眾假期
+          if (!Array.isArray(v) || !v.length) continue;   // 資料裏偶然有空白的班次，略過
+          const s0 = hm(t0), e0 = hm(v[0]), hw = +v[1] > 0 ? +v[1] : 0;
+          if (!isFinite(s0) || !isFinite(e0)) continue;
+          const w = [+code, s0, e0 <= s0 ? e0 + 1440 : e0, hw], kq = w.join('-');
           if (!seenQ.has(kq)) { seenQ.add(kq); q.push(w); }
         }
         arr.push({ n: st.length, a: st[0], z: st[st.length - 1], f: hasF ? e.fares.map(Number) : [], q }); m.set(k, arr);
