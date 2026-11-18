@@ -239,7 +239,7 @@ body{font-family:"Noto Sans HK","Noto Sans CJK HK","Noto Sans TC",system-ui,sans
 </div>
 <div id="envWarn" class="banner" hidden style="position:fixed;z-index:1300;left:12px;right:12px;top:70px"></div>
 <button type="button" class="fab" id="btnSet" aria-label="設定">⚙</button>
-<div class="brand">追巴士<span class="ver">v17.2</span></div>
+<div class="brand">追巴士<span class="ver">v17.3</span></div>
 <button type="button" class="fab" id="locate" aria-label="回到目前位置">◎</button>
 
 <div id="homeBox">
@@ -320,7 +320,7 @@ const PED = 'https://mapapi.hkmapservice.gov.hk/PedRoute/NAServer/route/';
 const pedCache = new Map(), pedPath = new Map(); let pedMode = null, pedFails = 0, pedOk = 0;
 const DEBUG = /beta|debug/i.test(location.pathname) || /[?&]debug=1/.test(location.search);   // 只有創作者的測試網址才顯示資料測試與除錯檢查
 /* 參數：全部集中在這裏，方便測試時調整 */
-const SPEED = { rO: 400, rD: 700, trMin: 5, maxRides: 3, directN: 40, directKeys: 160, firstKeys: 100, chosenKeys: 300, extraPlans: 80, extraKeys: 500, suppKeys: 500, suppSpots: 999, originStops: 25, etaMs: 8000, phaseMs: 10000, walkMs: 3500, refineN: 12, beam: 150, merge: 1, spec: 0, budgetMs: 6000, hubs: 1, nocache: 0, sched: 1, op: 1, nightSlack: 30, opHorizon: 75, shiftN: 12, shiftKeys: 120 };
+const SPEED = { rO: 400, rD: 700, trMin: 5, maxRides: 3, directN: 40, directKeys: 160, firstKeys: 100, chosenKeys: 300, extraPlans: 80, extraKeys: 500, suppKeys: 500, suppSpots: 999, originStops: 25, etaMs: 8000, phaseMs: 6000, walkMs: 2500, refineN: 12, beam: 150, merge: 1, spec: 0, budgetMs: 6000, hubs: 1, nocache: 0, sched: 1, op: 1, nightSlack: 30, opHorizon: 75, shiftN: 12, shiftKeys: 120 };
 { const q = new URLSearchParams(location.search); for (const k of Object.keys(SPEED)) if (q.has(k) && isFinite(+q.get(k))) SPEED[k] = +q.get(k); }   // 測試用：網址後面加 ?rides=… 之類可以覆蓋（例如 ?maxRides=3&merge=0）
 const pedKey = (a, b) => a.lat.toFixed(5) + ',' + a.lng.toFixed(5) + '|' + b.lat.toFixed(5) + ',' + b.lng.toFixed(5);
 function realMin(a, b, fbM, transfer) {
@@ -1536,6 +1536,18 @@ async function runSearch(boost) {
     setStatus(`找到 ${direct.length} 條直達路線和 ${others.length} 個轉乘方案，正在查實時到站…`);
     const specKeys = new Set(); if (SPEED.spec > 0) for (const p of others.slice(0, SPEED.spec)) planKeys(p).forEach(k => specKeys.add(k));   // 預先同時查最有希望的轉乘方案
     await getKeys([...k1, ...firstKeys, ...specKeys], '查詢直達及第一程的實時到站'); tm('查第一批班次（' + lastKeys + ' 項）');
+    try { // 查過班次、但所有站都沒有預報、也沒有時間表可以推算的路線，大概停駛了：這次搜索不再考慮，名額留給有服務的路線
+      const dead = new Set();
+      nt.routes.forEach((r, ri) => {
+        if (nt.inactive[ri]) return;
+        let fetchedAny = false, hasAny = false;
+        if (isKmb(r)) { fetchedAny = !!store.get('k|' + r.route + '|' + r.st); for (let p = 0; fetchedAny && !hasAny && p < r.stops.length; p++) { const l = etaAt(r, p, store); if (l && l.length) hasAny = true; } }
+        else for (let p = 0; p < r.stops.length; p++) { if (store.get('c|' + r.stopsByCo.ctb[r.pos[p]] + '|' + r.route)) { fetchedAny = true; const l = etaAt(r, p, store); if (l && l.length) { hasAny = true; break; } } }
+        if (fetchedAny && !hasAny) { nt.inactive[ri] = 1; dead.add(r); }
+      });
+      if (dead.size) others = others.filter(p => p.legs.every(l => !dead.has(l.r)));
+      tm('查過班次但完全沒有預報的路線 ' + dead.size + ' 條，這次略過');
+    } catch (e) { /* 忽略 */ }
     const near = (m, n) => [...m.entries()].sort((a, b) => a[1] - b[1]).slice(0, n).map(([id]) => nt.stops.get(id));
     tm('（略過步行查詢，初篩用直線估算）');
     const now = Date.now();
@@ -1820,7 +1832,7 @@ async function runSearch(boost) {
         Lg.push(info.join('；'));
       }
       Lg.push(`靜態找到含此路線的方案：直達 ${dAll.filter(has).length} 個、轉乘 ${others.filter(has).length} 個；進入第一批查詢的轉乘方案 ${chosen.filter(has).length} 個`);
-      chosen.filter(has).slice(0, 4).forEach(p => { const ev = evalPlan(p, ctx); Lg.push('評估：' + p.legs.map(l => l.r.route).join('→') + (ev.drop ? '：被捨棄（' + ev.drop + '）' : '：' + rnd(ev) + ' 分鐘')); });
+      chosen.filter(has).slice(0, 5).forEach(p => { const ev = evalPlan(p, ctx); Lg.push('評估：' + p.legs.map(l => l.r.route).join('→') + (ev.drop ? '：被捨棄（' + ev.drop + '）' : '：' + rnd(ev) + ' 分鐘') + '｜各程上車站班次：' + p.legs.map(l => { const li = etaAt(l.r, l.i, store); return l.r.route + (li === null ? '(沒查過)' : li.length ? '(' + li.slice(0, 2).map(x => new Date(x.t).toTimeString().slice(0, 5) + (x.src === 'sched' ? '表' : '')).join(' ') + ')' : '(空)'); }).join(' ')); });
       Lg.push(`規則過濾後，轉乘名單含此路線 ${T.filter(x => has(x.plan)).length} 個、直達名單含此路線 ${D.filter(x => has(x.plan)).length} 個`);
       traceLog = Lg;
     }
@@ -1935,12 +1947,23 @@ function dayBits(nowMs) {
 }
 function routeWindows(r) {
   if (!secMap) return null;
+  const mk = Math.floor(Date.now() / 60000);
+  if (r._wm === mk) return r._wv;   // 每分鐘只算一次
+  let res = null;
   const c = r.co[0], arr = secMap.get(c + '|' + r.route + '|' + (r.bound && r.bound[c]));
-  if (!arr) return null;
-  const n = r.stops.length, v = arr.find(x => x.n === n && x.a === r.stops[0] && x.z === r.stops[n - 1]);
-  if (!v || !v.q || !v.q.length) return null;
-  const w = v.q.filter(x => x[0] & dayBits(Date.now()));
-  return w.length ? w : v.q;   // 日子代碼對不上時，就用全部時段
+  if (arr) {
+    const n = r.stops.length, a0 = r.stops[0], z0 = r.stops[n - 1];
+    const v = arr.find(x => x.n === n && x.a === a0 && x.z === z0) || arr.find(x => x.a === a0 && x.z === z0);
+    let q = v && v.q && v.q.length ? v.q : null;
+    if (!q) {   // 站數、起終站對不上：同一路線同一方向的所有班次時段合起來用
+      const u = [], seen = new Set();
+      for (const x of arr) for (const w of (x.q || [])) { const k = w.join('-'); if (!seen.has(k)) { seen.add(k); u.push(w); } }
+      q = u.length ? u : null;
+    }
+    if (q) { const bits = dayBits(Date.now()), w = q.filter(x => x[0] & bits); res = w.length ? w : q; }
+  }
+  r._wm = mk; r._wv = res;
+  return res;
 }
 /* 這條路線在 nowMin 分鐘（當日 0 時起計）前後有沒有服務：現在服務中，或 horizon 分鐘內即將開出。查不到資料就當作有服務 */
 function routeActive(r, nowMin, horizon) {
@@ -1951,13 +1974,13 @@ function routeActive(r, nowMin, horizon) {
 /* 時間表推算：實時預報查不到（例如午夜還沒開出的首班車）時，用路線的首班時間和班距，推算這個站的接下來幾班車 */
 function schedList(r, p, nowMs) {
   const q = routeWindows(r); if (!q) return null;
-  const dt = new Date(nowMs), mid = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).getTime(), off = ((r.cum && r.cum[p]) || 0) * 1000, out = [];
+  const dt = new Date(nowMs), mid = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).getTime(), off = ((r.cum && r.cum[p]) || 0) * 1000, out = [], lo = nowMs - 60000, hi = nowMs + 3 * 3600000;
   for (const [, s0, e0, hw0] of q) {
     const hw = (hw0 >= 60 ? hw0 : 600) * 1000;
     for (const dOff of [-1440, 0, 1440]) {
-      const start = mid + (s0 + dOff) * 60000, end = mid + (e0 + dOff) * 60000;
-      if (end + off < nowMs - 60000 || start + off > nowMs + 3 * 3600000) continue;
-      for (let t = start; t <= end && out.length < 80; t += hw) { const tt = t + off; if (tt >= nowMs - 60000 && tt <= nowMs + 3 * 3600000) out.push({ t: tt, rmk: '原定班次（按時間表推算）', src: 'sched' }); }
+      const start = mid + (s0 + dOff) * 60000 + off, end = mid + (e0 + dOff) * 60000 + off;
+      if (end < lo || start > hi) continue;
+      for (let t = start <= lo ? start + Math.ceil((lo - start) / hw) * hw : start; t <= end && t <= hi && out.length < 60; t += hw) out.push({ t, rmk: '原定班次（按時間表推算）', src: 'sched' });
     }
   }
   return out.sort((x, y) => x.t - y.t).slice(0, 3);
